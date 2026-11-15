@@ -1,0 +1,194 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOwnerProfile(data, ownerId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == ownerId
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() <= 120
+        && data.email is string && data.email.size() <= 160
+        && data.preferredLanguage in ['rw', 'en', 'fr']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBusiness(data, businessId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'slug', 'name', 'category', 'isDemo', 'isPublished',
+          'description', 'address', 'district', 'city', 'phone', 'whatsappNumber',
+          'email', 'humanHandoffNote', 'hours', 'services', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'slug', 'name', 'category', 'isDemo', 'isPublished', 'demoLabel',
+          'description', 'address', 'countryCode', 'countryName', 'region', 'district', 'sector', 'city',
+          'phone', 'whatsappNumber', 'email', 'humanHandoffNote', 'hours', 'services', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == businessId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 128 && data.slug.matches('^[a-z0-9\\-]+$')
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.category is string && data.category.size() <= 80
+        && data.isDemo is bool
+        && data.isDemo == false
+        && data.isPublished is bool
+        && (!('demoLabel' in data) || (data.demoLabel is string && data.demoLabel.size() <= 60))
+        && data.description is string && data.description.size() <= 500
+        && data.address is string && data.address.size() <= 160
+        && (!('countryCode' in data) || (data.countryCode is string && data.countryCode.size() <= 8))
+        && (!('countryName' in data) || (data.countryName is string && data.countryName.size() <= 100))
+        && (!('region' in data) || (data.region is string && data.region.size() <= 100))
+        && data.district is string && data.district.size() <= 80
+        && (!('sector' in data) || (data.sector is string && data.sector.size() <= 80))
+        && data.city is string && data.city.size() <= 80
+        && data.phone is string && data.phone.size() <= 40
+        && data.whatsappNumber is string && data.whatsappNumber.size() <= 40
+        && data.email is string && data.email.size() <= 120
+        && data.humanHandoffNote is string && data.humanHandoffNote.size() <= 300
+        && data.hours is list && data.hours.size() == 7 && data.hours[0] is map
+        && data.services is list && data.services.size() <= 50
+        && (data.services.size() == 0 || data.services[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWhatsAppIntegration(data, businessId, integrationId) {
+      return integrationId == 'whatsapp'
+        && data.keys().hasAll(['businessId', 'ownerId', 'phoneNumberId', 'displayPhoneNumber', 'webhookEnabled', 'updatedAt'])
+        && data.keys().hasOnly(['businessId', 'ownerId', 'phoneNumberId', 'displayPhoneNumber', 'webhookEnabled', 'updatedAt'])
+        && isValidId(data.businessId)
+        && data.businessId == businessId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.phoneNumberId is string && data.phoneNumberId.size() <= 64
+        && data.displayPhoneNumber is string && data.displayPhoneNumber.size() <= 40
+        && data.webhookEnabled is bool
+        && data.updatedAt is timestamp;
+    }
+
+    match /owners/{ownerId} {
+      allow get: if isSignedIn() && isValidId(ownerId) && request.auth.uid == ownerId;
+      allow list: if false;
+      allow create: if isEmailVerified()
+        && isValidId(ownerId)
+        && request.auth.uid == ownerId
+        && isValidOwnerProfile(incoming(), ownerId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isEmailVerified()
+        && isValidId(ownerId)
+        && request.auth.uid == ownerId
+        && isValidOwnerProfile(incoming(), ownerId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLanguage', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /businesses/{businessId} {
+      // Single-document read: public only when published, otherwise strictly restricted to the business owner
+      allow get: if isValidId(businessId) && resource != null && (
+        existing().isPublished == true ||
+        (isSignedIn() && existing().ownerId == request.auth.uid)
+      );
+
+      // List queries: strictly enforced against resource.data (owner's own businesses or published storefronts)
+      allow list: if (isSignedIn() && resource.data.ownerId == request.auth.uid)
+        || resource.data.isPublished == true;
+
+      // Create: strictly authenticated + verified owner creating their own non-demo business
+      allow create: if isEmailVerified()
+        && isValidId(businessId)
+        && isValidBusiness(incoming(), businessId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // Update: only the business's ownerId can update allowed mutable fields; ownerId/id/slug/createdAt/isDemo are immutable
+      allow update: if isEmailVerified()
+        && isValidId(businessId)
+        && existing().ownerId == request.auth.uid
+        && isValidBusiness(incoming(), businessId)
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().slug == existing().slug
+        && incoming().isDemo == existing().isDemo
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'category', 'isPublished', 'description', 'address',
+          'countryCode', 'countryName', 'region', 'district', 'sector', 'city',
+          'phone', 'whatsappNumber', 'email', 'humanHandoffNote',
+          'hours', 'services', 'updatedAt'
+        ]);
+
+      // Delete: only the owner can delete their own business
+      allow delete: if isEmailVerified()
+        && isValidId(businessId)
+        && existing().ownerId == request.auth.uid;
+
+      // Subcollection: Owner-only WhatsApp Cloud API integration config
+      match /integrations/{integrationId} {
+        allow get: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
+        allow list: if false;
+        allow create: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
+          && isValidWhatsAppIntegration(incoming(), businessId, integrationId)
+          && incoming().updatedAt == request.time;
+        allow update: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
+          && isValidWhatsAppIntegration(incoming(), businessId, integrationId)
+          && incoming().businessId == existing().businessId
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'phoneNumberId', 'displayPhoneNumber', 'webhookEnabled', 'updatedAt'
+          ]);
+        allow delete: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
+      }
+    }
+  }
+}

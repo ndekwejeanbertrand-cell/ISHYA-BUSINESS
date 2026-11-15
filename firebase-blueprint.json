@@ -1,0 +1,210 @@
+{
+  "entities": {
+    "OwnerProfile": {
+      "title": "OwnerProfile",
+      "description": "Authenticated business owner account metadata isolated per user UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["rw", "en", "fr"],
+          "maxLength": 4
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "email", "preferredLanguage", "createdAt", "updatedAt"]
+    },
+    "Business": {
+      "title": "Business",
+      "description": "Independent business storefront and verified knowledge base owned by a single ownerId.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "slug": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z0-9\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "isDemo": {
+          "type": "boolean"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "demoLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "countryCode": {
+          "type": "string",
+          "maxLength": 8
+        },
+        "countryName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "district": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "sector": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "city": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "whatsappNumber": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "humanHandoffNote": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "hours": {
+          "type": "array"
+        },
+        "services": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "slug",
+        "name",
+        "category",
+        "isDemo",
+        "isPublished",
+        "description",
+        "address",
+        "district",
+        "city",
+        "phone",
+        "whatsappNumber",
+        "email",
+        "humanHandoffNote",
+        "hours",
+        "services",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WhatsAppIntegration": {
+      "title": "WhatsAppIntegration",
+      "description": "Private Meta WhatsApp Cloud API routing metadata for a single business.",
+      "type": "object",
+      "properties": {
+        "businessId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "phoneNumberId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "displayPhoneNumber": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "webhookEnabled": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["businessId", "ownerId", "phoneNumberId", "displayPhoneNumber", "webhookEnabled", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/owners/{ownerId}": {
+      "schema": { "$ref": "#/entities/OwnerProfile" },
+      "description": "Private authenticated business owner account documents."
+    },
+    "/businesses/{businessId}": {
+      "schema": { "$ref": "#/entities/Business" },
+      "description": "Independent business profiles and verified chatbot knowledge bases."
+    },
+    "/businesses/{businessId}/integrations/{integrationId}": {
+      "schema": { "$ref": "#/entities/WhatsAppIntegration" },
+      "description": "Owner-only WhatsApp Cloud API integration metadata per business."
+    }
+  }
+}
