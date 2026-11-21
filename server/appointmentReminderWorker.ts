@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import type { Express } from 'express';
-import { recoverExpiredAppointmentReminderClaims } from './appointmentReminderQueue.ts';
 
 /** Compare scheduler credentials without leaking timing information. */
 export function isValidReminderWorkerAuthorization(
@@ -16,8 +15,8 @@ export function isValidReminderWorkerAuthorization(
 }
 
 /**
- * Protected scheduler endpoint. It deliberately does not claim or deliver jobs:
- * provider adapters and appointment-status revalidation must be implemented first.
+ * Protected scheduler endpoint. It intentionally does not claim or deliver jobs
+ * until provider adapters and appointment-status revalidation are implemented.
  */
 export function registerAppointmentReminderWorkerRoutes(app: Express): void {
   app.post('/api/internal/appointment-reminders/worker', async (req, res) => {
@@ -31,24 +30,11 @@ export function registerAppointmentReminderWorkerRoutes(app: Express): void {
       return;
     }
 
-    // Do not acquire leases until a real delivery adapter is configured.
-    // This prevents jobs being stranded in "processing" while delivery is unavailable.
-    const deliveryConfigured = false;
-    if (!deliveryConfigured) {
-      res.status(503).json({
-        status: 'paused',
-        deliveryConfigured: false,
-        message: 'No reminder delivery adapter is enabled; no jobs were claimed or sent.',
-      });
-      return;
-    }
-
-    try {
-      const recoveredExpiredLeases = await recoverExpiredAppointmentReminderClaims(Date.now(), 50);
-      res.json({ status: 'ok', recoveredExpiredLeases });
-    } catch (error) {
-      console.error('Appointment reminder worker:', error);
-      res.status(502).json({ error: 'Reminder worker is temporarily unavailable.' });
-    }
+    // Safe pause: no queue jobs are claimed, changed, or sent by this endpoint.
+    res.status(503).json({
+      status: 'paused',
+      deliveryConfigured: false,
+      message: 'No reminder delivery adapter is enabled; no jobs were claimed or sent.',
+    });
   });
 }
