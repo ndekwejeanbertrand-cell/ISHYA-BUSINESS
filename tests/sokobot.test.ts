@@ -33,6 +33,7 @@ import {
   searchCountries,
 } from '../server/locations.ts';
 import type { BusinessProfile } from '../src/types.ts';
+import { isValidReminderWorkerAuthorization } from '../server/appointmentReminderWorker.ts';
 
 function makeTestBusiness(overrides: Partial<BusinessProfile>): BusinessProfile {
   return {
@@ -578,5 +579,21 @@ describe('ISHYA Business — durable reminder queue records', () => {
     );
     const late = buildReminderQueueRecords(confirmed, Date.parse('2027-01-15T09:15:00.000Z'));
     assert.deepEqual(late.map((job) => job.offset), ['30m', '30m']);
+  });
+});
+
+describe('ISHYA reminder worker authentication', () => {
+  const secret = 'a'.repeat(48);
+
+  it('accepts only the configured Bearer secret', () => {
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, secret), true);
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${'b'.repeat(48)}`, secret), false);
+    assert.equal(isValidReminderWorkerAuthorization(secret, secret), false);
+  });
+
+  it('fails closed when the secret is absent, short, or the header is missing', () => {
+    assert.equal(isValidReminderWorkerAuthorization(undefined, secret), false);
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, undefined), false);
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, 'short'), false);
   });
 });
