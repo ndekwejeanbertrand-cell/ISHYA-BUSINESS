@@ -119,3 +119,16 @@ export interface Appointment {
   createdAt: string;
   updatedAt: string;
 }
+
+
+export interface InAppNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  appointmentId?: string;
+  startAt?: string;
+  timeZone?: string;
+  read: boolean;
+  createdAt: string;
+}
