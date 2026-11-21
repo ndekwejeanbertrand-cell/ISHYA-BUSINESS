@@ -557,12 +557,11 @@ describe('ISHYA Business — durable reminder queue records', () => {
     assert.ok(rescheduled[0].id.includes(String(Date.parse('2027-01-16T10:00:00.000Z'))));
   });
 
-  it('uses bounded retry scheduling and a lease token is required to release a claim', async () => {
-    assert.equal(typeof releaseAppointmentReminderClaim, 'function');
-    assert.throws(() => {
-      // Invalid identifiers are rejected before any network request.
-      void releaseAppointmentReminderClaim('../unsafe', '', '2027-01-15T10:00:00.000Z', 'failure');
-    }, /Invalid reminder claim/);
+  it('requires a valid job ID and lease token before releasing a claim', async () => {
+    await assert.rejects(
+      () => releaseAppointmentReminderClaim('../unsafe', '', '2027-01-15T10:00:00.000Z', 'failure'),
+      /Invalid reminder claim/
+    );
   });
 
   it('does not create jobs for unconfirmed appointments or overdue reminder deadlines', () => {
