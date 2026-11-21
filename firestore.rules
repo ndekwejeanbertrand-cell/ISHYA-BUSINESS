@@ -95,6 +95,182 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+
+    function isAppointmentOwner(data) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/businesses/$(data.businessId))
+        && get(/databases/$(database)/documents/businesses/$(data.businessId)).data.ownerId == request.auth.uid;
+    }
+
+    function validAppointment(data, appointmentId) {
+      return data.keys().hasAll([
+          'id', 'businessId', 'ownerId', 'customerUid', 'customerName',
+          'customerPhone', 'serviceId', 'serviceName', 'startAt', 'endAt',
+          'timeZone', 'language', 'requestedBy', 'status',
+          'notificationChannels', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'businessId', 'ownerId', 'customerUid', 'customerName',
+          'customerPhone', 'customerEmail', 'serviceId', 'serviceName',
+          'startAt', 'endAt', 'timeZone', 'language', 'requestedBy',
+          'status', 'notificationChannels', 'customerNote', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == appointmentId
+        && isValidId(data.businessId) && isValidId(data.ownerId)
+        && isValidId(data.customerUid) && isValidId(data.serviceId)
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120
+        && data.customerPhone is string && data.customerPhone.matches('^\\+[1-9][0-9]{7,14}
+      allow get: if isSignedIn() && isValidId(ownerId) && request.auth.uid == ownerId;
+      allow list: if false;
+      allow create: if isEmailVerified()
+        && isValidId(ownerId)
+        && request.auth.uid == ownerId
+        && isValidOwnerProfile(incoming(), ownerId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isEmailVerified()
+        && isValidId(ownerId)
+        && request.auth.uid == ownerId
+        && isValidOwnerProfile(incoming(), ownerId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLanguage', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /businesses/{businessId} {
+      // Single-document read: public only when published, otherwise strictly restricted to the business owner
+      allow get: if isValidId(businessId) && resource != null && (
+        existing().isPublished == true ||
+        (isSignedIn() && existing().ownerId == request.auth.uid)
+      );
+
+      // List queries: strictly enforced against resource.data (owner's own businesses or published storefronts)
+      allow list: if (isSignedIn() && resource.data.ownerId == request.auth.uid)
+        || resource.data.isPublished == true;
+
+      // Create: strictly authenticated + verified owner creating their own non-demo business
+      allow create: if isEmailVerified()
+        && isValidId(businessId)
+        && isValidBusiness(incoming(), businessId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // Update: only the business's ownerId can update allowed mutable fields; ownerId/id/slug/createdAt/isDemo are immutable
+      allow update: if isEmailVerified()
+        && isValidId(businessId)
+        && existing().ownerId == request.auth.uid
+        && isValidBusiness(incoming(), businessId)
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().slug == existing().slug
+        && incoming().isDemo == existing().isDemo
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'category', 'isPublished', 'description', 'address',
+          'countryCode', 'countryName', 'region', 'district', 'sector', 'city',
+          'phone', 'whatsappNumber', 'email', 'humanHandoffNote',
+          'hours', 'services', 'updatedAt'
+        ]);
+
+      // Delete: only the owner can delete their own business
+      allow delete: if isEmailVerified()
+        && isValidId(businessId)
+        && existing().ownerId == request.auth.uid;
+
+      // Subcollection: Owner-only WhatsApp Cloud API integration config
+      match /integrations/{integrationId} {
+        allow get: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
+        allow list: if false;
+        allow create: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
+          && isValidWhatsAppIntegration(incoming(), businessId, integrationId)
+          && incoming().updatedAt == request.time;
+        allow update: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
+          && isValidWhatsAppIntegration(incoming(), businessId, integrationId)
+          && incoming().businessId == existing().businessId
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'phoneNumberId', 'displayPhoneNumber', 'webhookEnabled', 'updatedAt'
+          ]);
+        allow delete: if isEmailVerified()
+          && isValidId(businessId)
+          && isValidId(integrationId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId))
+          && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
+      }
+    }
+  }
+}
+)
+        && data.serviceName is string && data.serviceName.size() >= 1 && data.serviceName.size() <= 120
+        && data.startAt is timestamp && data.endAt is timestamp && data.endAt > data.startAt
+        && data.timeZone is string && data.timeZone.size() <= 64
+        && data.language in ['rw', 'en', 'fr']
+        && data.requestedBy in ['customer', 'owner']
+        && data.status in ['pending', 'confirmed', 'declined', 'cancelled', 'completed', 'no_show']
+        && data.notificationChannels is list && data.notificationChannels.size() >= 1
+        && data.notificationChannels.size() <= 3
+        && data.notificationChannels.toSet().hasOnly(['whatsapp', 'sms', 'app'])
+        && (!('customerEmail' in data) || (data.customerEmail is string && data.customerEmail.size() <= 160))
+        && (!('customerNote' in data) || (data.customerNote is string && data.customerNote.size() <= 500))
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    match /appointments/{appointmentId} {
+      allow get, list: if isSignedIn()
+        && (resource.data.customerUid == request.auth.uid || isAppointmentOwner(resource.data));
+
+      // Signed-in customers can submit requests; they cannot self-confirm.
+      allow create: if isEmailVerified()
+        && validAppointment(incoming(), appointmentId)
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().requestedBy == 'customer'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAppointmentOwner(incoming());
+
+      // Only the business owner can change status or reschedule. Identity and
+      // customer-consent fields are immutable after creation.
+      allow update: if isEmailVerified()
+        && isAppointmentOwner(existing())
+        && validAppointment(incoming(), appointmentId)
+        && incoming().id == existing().id
+        && incoming().businessId == existing().businessId
+        && incoming().ownerId == existing().ownerId
+        && incoming().customerUid == existing().customerUid
+        && incoming().customerPhone == existing().customerPhone
+        && incoming().serviceId == existing().serviceId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'startAt', 'endAt', 'timeZone', 'serviceName',
+          'customerNote', 'updatedAt'
+        ])
+        && (
+          (existing().status == 'pending' && incoming().status in ['confirmed', 'declined', 'cancelled'])
+          || (existing().status == 'confirmed' && incoming().status in ['cancelled', 'completed', 'no_show'])
+          || (existing().status == incoming().status)
+        );
+
+      allow delete: if false;
+    }
+
     match /owners/{ownerId} {
       allow get: if isSignedIn() && isValidId(ownerId) && request.auth.uid == ownerId;
       allow list: if false;
