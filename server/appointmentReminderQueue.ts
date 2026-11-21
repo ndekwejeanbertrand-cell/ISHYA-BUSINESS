@@ -473,3 +473,49 @@ export async function createInAppAppointmentNotification(
   }
   throw new Error(`In-app notification creation failed (HTTP ${response.status}).`);
 }
+
+
+export async function listInAppNotificationsForUser(userUid: string, limit = 20): Promise<Record<string, unknown>[]> {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(userUid)) throw new Error('Invalid notification user ID.');
+  const safeLimit = Math.min(50, Math.max(1, Math.floor(limit)));
+  const response = await firestoreRequest(':runQuery', {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'userNotifications' }],
+        where: { fieldFilter: { field: { fieldPath: 'userUid' }, op: 'EQUAL', value: { stringValue: userUid } } },
+        limit: safeLimit,
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(`In-app notification lookup failed (HTTP ${response.status}).`);
+  const rows = await response.json() as Array<{ document?: FirestoreDocument }>;
+  return rows.filter((row) => row.document).map((row) => unpack(row.document!))
+    .sort((a, b) => Date.parse(String(b.createdAt ?? '')) - Date.parse(String(a.createdAt ?? '')));
+}
+
+export async function markInAppNotificationRead(userUid: string, notificationId: string): Promise<boolean> {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(userUid) || !/^[a-zA-Z0-9_-]{1,256}$/.test(notificationId)) {
+    throw new Error('Invalid notification identity.');
+  }
+  const response = await firestoreRequest(`/userNotifications/${encodeURIComponent(notificationId)}`);
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error(`In-app notification read failed (HTTP ${response.status}).`);
+  const doc = await response.json() as FirestoreDocument;
+  const record = unpack(doc);
+  if (record.userUid !== userUid || !doc.name || !doc.updateTime) return false;
+  if (record.read === true) return true;
+  const commit = await firestoreRequest(':commit', {
+    method: 'POST',
+    body: JSON.stringify({
+      writes: [{
+        update: { name: doc.name, fields: { read: encode(true), readAt: encode(new Date().toISOString()) } },
+        updateMask: { fieldPaths: ['read', 'readAt'] },
+        currentDocument: { updateTime: doc.updateTime },
+      }],
+    }),
+  });
+  if (commit.status === 409 || commit.status === 412) return false;
+  if (!commit.ok) throw new Error(`In-app notification update failed (HTTP ${commit.status}).`);
+  return true;
+}
