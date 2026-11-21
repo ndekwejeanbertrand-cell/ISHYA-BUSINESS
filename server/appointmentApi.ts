@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { extractBearerToken, getFirebaseConfig, verifyFirebaseIdToken } from './auth.ts';
 import { getFirestoreBusinessById } from './firestoreRest.ts';
 import { AppointmentValidationError, parseServiceDurationMinutes, validateAppointmentRequest } from './appointments.ts';
-import { cancelPendingAppointmentReminders, enqueueAppointmentReminders } from './appointmentReminderQueue.ts';
+import { cancelPendingAppointmentReminders, enqueueAppointmentReminders, listInAppNotificationsForUser, markInAppNotificationRead } from './appointmentReminderQueue.ts';
 
 const firebaseConfig = getFirebaseConfig();
 const root = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${encodeURIComponent(firebaseConfig.firestoreDatabaseId)}/documents`;
@@ -141,6 +141,28 @@ export function registerAppointmentRoutes(app: Express) {
       }
       const now = new Date().toISOString();
       res.status(201).json({ appointment: { ...data, createdAt: now, updatedAt: now }, remindersQueued });
+    } catch (error) { fail(res, error); }
+  });
+
+
+  app.get('/api/notifications', async (req, res) => {
+    try {
+      const { user } = await auth(req);
+      const requestedLimit = Number(req.query.limit ?? 20);
+      const limit = Number.isFinite(requestedLimit) ? Math.min(50, Math.max(1, Math.floor(requestedLimit))) : 20;
+      const notifications = await listInAppNotificationsForUser(user.uid, limit);
+      res.json({ notifications });
+    } catch (error) { fail(res, error); }
+  });
+
+  app.patch('/api/notifications/:notificationId/read', async (req, res) => {
+    try {
+      const { user } = await auth(req);
+      const id = req.params.notificationId;
+      if (!/^[a-zA-Z0-9_-]{1,256}$/.test(id)) { res.status(400).json({ error: 'Invalid notification ID.' }); return; }
+      const updated = await markInAppNotificationRead(user.uid, id);
+      if (!updated) { res.status(404).json({ error: 'Notification not found.' }); return; }
+      res.json({ success: true });
     } catch (error) { fail(res, error); }
   });
 
