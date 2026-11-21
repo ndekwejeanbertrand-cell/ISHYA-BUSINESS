@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CalendarPlus, CheckCircle2, LockKeyhole } from 'lucide-react';
-import type { Language, ServiceItem } from '../types';
+import type { Appointment, Language, ServiceItem } from '../types';
 
 interface AppointmentBookingFormProps {
   businessId: string;
@@ -39,6 +39,14 @@ const text = {
     minutes: 'iminota',
     required: 'Uzuza ibisabwa byose.',
     past: 'Hitamo igihe kiri imbere.',
+    myRequests: 'Aho wasabye rendez-vous',
+    noRequests: 'Nta busabe urasaba.',
+    statusPending: 'Itegereje kwemezwa',
+    statusConfirmed: 'Yemejwe',
+    statusDeclined: 'Yanzwe',
+    statusCancelled: 'Yahagaritswe',
+    statusCompleted: 'Yarangiye',
+    statusNoShow: 'Ntiyitabiriye',
   },
   en: {
     title: 'Request an appointment',
@@ -65,6 +73,14 @@ const text = {
     minutes: 'minutes',
     required: 'Complete all required fields.',
     past: 'Choose a future time.',
+    myRequests: 'Your appointment requests',
+    noRequests: 'You have not requested any appointments yet.',
+    statusPending: 'Pending',
+    statusConfirmed: 'Confirmed',
+    statusDeclined: 'Declined',
+    statusCancelled: 'Cancelled',
+    statusCompleted: 'Completed',
+    statusNoShow: 'No-show',
   },
   fr: {
     title: 'Demander un rendez-vous',
@@ -91,6 +107,14 @@ const text = {
     minutes: 'minutes',
     required: 'Veuillez remplir les champs obligatoires.',
     past: 'Choisissez une heure future.',
+    myRequests: 'Vos demandes de rendez-vous',
+    noRequests: 'Vous n’avez encore demandé aucun rendez-vous.',
+    statusPending: 'En attente',
+    statusConfirmed: 'Confirmé',
+    statusDeclined: 'Refusé',
+    statusCancelled: 'Annulé',
+    statusCompleted: 'Terminé',
+    statusNoShow: 'Absent',
   },
 } as const;
 
@@ -123,6 +147,36 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [myAppointments, setMyAppointments] = useState<Appointment[]>([]);
+  const [loadingAppointments, setLoadingAppointments] = useState(false);
+
+  const loadMyAppointments = useCallback(async () => {
+    if (!idToken || !emailVerified) {
+      setMyAppointments([]);
+      return;
+    }
+    setLoadingAppointments(true);
+    try {
+      const response = await fetch('/api/appointments', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      const data = await response.json();
+      if (response.ok) setMyAppointments(Array.isArray(data.appointments) ? data.appointments : []);
+    } finally {
+      setLoadingAppointments(false);
+    }
+  }, [idToken, emailVerified]);
+
+  useEffect(() => { void loadMyAppointments(); }, [loadMyAppointments]);
+
+  const statusLabel = (status: Appointment['status']) => ({
+    pending: t.statusPending,
+    confirmed: t.statusConfirmed,
+    declined: t.statusDeclined,
+    cancelled: t.statusCancelled,
+    completed: t.statusCompleted,
+    no_show: t.statusNoShow,
+  })[status];
 
   const selectedService = services.find((service) => service.id === serviceId);
   const duration = useMemo(() => selectedService ? durationMinutes(selectedService.durationOrUnit) : null, [selectedService]);
@@ -230,6 +284,28 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
           {success && <p role="status" className="flex items-start gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800"><CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />{t.success}</p>}
           <button type="submit" disabled={sending || !duration} className="min-h-[44px] w-full rounded-xl bg-[#101D35] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#182A4D] disabled:opacity-50">{sending ? t.sending : t.submit}</button>
         </form>
+      )}
+      {canBook && (
+        <div className="border-t border-[#D9B96E]/30 pt-3 space-y-2">
+          <h4 className="text-xs font-semibold text-[#101D35]">{t.myRequests}</h4>
+          {loadingAppointments ? (
+            <p className="text-xs text-slate-500">...</p>
+          ) : myAppointments.length === 0 ? (
+            <p className="text-xs text-slate-500">{t.noRequests}</p>
+          ) : (
+            <div className="space-y-2">
+              {myAppointments.slice(0, 5).map((appointment) => (
+                <div key={appointment.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-[#101D35] truncate">{appointment.serviceName}</p>
+                    <p className="text-[11px] text-slate-500">{new Intl.DateTimeFormat(language === 'rw' ? 'rw-RW' : language === 'fr' ? 'fr-FR' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: appointment.timeZone || 'Africa/Kigali' }).format(new Date(appointment.startAt))}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${appointment.status === 'confirmed' ? 'bg-emerald-50 text-emerald-700' : appointment.status === 'pending' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{statusLabel(appointment.status)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </section>
   );
