@@ -42,7 +42,7 @@ export function buildAppointmentReminderTemplatePayload(
   templateLanguage: string
 ) {
   const recipient = to.replace(/^\+/, '');
-  if (!/^\d{8,15}$/.test(recipient)) throw new Error('Invalid WhatsApp recipient number.');
+  if (!/^[1-9]\d{7,14}$/.test(recipient)) throw new Error('Invalid WhatsApp recipient number.');
   if (!/^[a-z0-9_]{1,128}$/.test(templateName)) throw new Error('Invalid WhatsApp template name.');
   if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(templateLanguage)) throw new Error('Invalid WhatsApp template language.');
   const values = [
