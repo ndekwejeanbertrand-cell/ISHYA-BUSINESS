@@ -145,7 +145,7 @@ export interface ClaimedReminderJob {
 /** Atomically claims due jobs using Firestore updateTime preconditions. */
 export async function claimDueAppointmentReminderJobs(
   now = Date.now(),
-  options: { limit?: number; leaseMs?: number } = {}
+  options: { limit?: number; leaseMs?: number; channel?: string } = {}
 ): Promise<ClaimedReminderJob[]> {
   const limit = Math.min(50, Math.max(1, Math.floor(options.limit ?? 20)));
   const leaseMs = Math.min(15 * 60_000, Math.max(30_000, options.leaseMs ?? 5 * 60_000));
@@ -164,6 +164,7 @@ export async function claimDueAppointmentReminderJobs(
   const due = rows.map((row) => row.document).filter((doc): doc is FirestoreDocument => Boolean(doc?.name && doc.updateTime))
     .map((doc) => ({ doc, record: unpack(doc) }))
     .filter(({ record }) => typeof record.nextAttemptAt === 'string' && Date.parse(String(record.nextAttemptAt)) <= now)
+    .filter(({ record }) => !options.channel || record.channel === options.channel)
     .sort((a, b) => Date.parse(String(a.record.nextAttemptAt)) - Date.parse(String(b.record.nextAttemptAt)))
     .slice(0, limit);
 
@@ -330,4 +331,76 @@ export async function cancelPendingAppointmentReminders(appointmentId: string, n
   const response = await firestoreRequest(':commit', { method: 'POST', body: JSON.stringify({ writes }) });
   if (!response.ok) throw new Error(`Reminder cancellation failed (HTTP ${response.status}).`);
   return pending.length;
+}
+
+
+export interface CurrentReminderAppointment {
+  id: string;
+  status: string;
+  startAt: string;
+  customerName?: string;
+  customerPhone?: string;
+  serviceName?: string;
+  businessName?: string;
+  timeZone?: string;
+  language?: 'rw' | 'en' | 'fr';
+}
+
+/** Re-read authoritative appointment data immediately before attempting delivery. */
+export async function getCurrentReminderAppointment(appointmentId: string): Promise<CurrentReminderAppointment | null> {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(appointmentId)) throw new Error('Invalid appointment ID.');
+  const response = await firestoreRequest(`/appointments/${encodeURIComponent(appointmentId)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Appointment reminder revalidation failed (HTTP ${response.status}).`);
+  const document = await response.json() as FirestoreDocument;
+  const record = unpack(document);
+  if (typeof record.id !== 'string' || typeof record.status !== 'string' || typeof record.startAt !== 'string') return null;
+  return {
+    id: record.id,
+    status: record.status,
+    startAt: record.startAt,
+    ...(typeof record.customerName === 'string' ? { customerName: record.customerName } : {}),
+    ...(typeof record.customerPhone === 'string' ? { customerPhone: record.customerPhone } : {}),
+    ...(typeof record.serviceName === 'string' ? { serviceName: record.serviceName } : {}),
+    ...(typeof record.businessName === 'string' ? { businessName: record.businessName } : {}),
+    ...(typeof record.timeZone === 'string' ? { timeZone: record.timeZone } : {}),
+    ...(record.language === 'rw' || record.language === 'en' || record.language === 'fr' ? { language: record.language } : {}),
+  };
+}
+
+/** Finalizes a claimed job only while the worker still owns its lease. */
+export async function finalizeAppointmentReminderClaim(
+  id: string,
+  leaseToken: string,
+  status: 'sent' | 'cancelled' | 'failed',
+  details: { messageId?: string; errorMessage?: string } = {}
+): Promise<boolean> {
+  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(id) || !leaseToken) throw new Error('Invalid reminder claim.');
+  const get = await firestoreRequest(`/${REMINDER_COLLECTION}/${encodeURIComponent(id)}`);
+  if (get.status === 404) return false;
+  if (!get.ok) throw new Error(`Reminder claim read failed (HTTP ${get.status}).`);
+  const doc = await get.json() as FirestoreDocument;
+  const record = unpack(doc);
+  if (record.status !== 'processing' || record.leaseToken !== leaseToken || !doc.updateTime) return false;
+  const fields: Record<string, FirestoreValue> = {
+    status: encode(status),
+    leaseToken: encode(null),
+    leaseUntil: encode(null),
+    updatedAt: encode(new Date().toISOString()),
+  };
+  if (details.messageId) fields.providerMessageId = encode(details.messageId.slice(0, 256));
+  if (details.errorMessage) fields.lastError = encode(details.errorMessage.slice(0, 500));
+  const response = await firestoreRequest(':commit', {
+    method: 'POST',
+    body: JSON.stringify({
+      writes: [{
+        update: { name: doc.name, fields },
+        updateMask: { fieldPaths: Object.keys(fields) },
+        currentDocument: { updateTime: doc.updateTime },
+      }],
+    }),
+  });
+  if (response.status === 409 || response.status === 412) return false;
+  if (!response.ok) throw new Error(`Reminder job finalization failed (HTTP ${response.status}).`);
+  return true;
 }
