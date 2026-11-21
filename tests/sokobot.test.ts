@@ -33,8 +33,9 @@ import {
   searchCountries,
 } from '../server/locations.ts';
 import type { BusinessProfile } from '../src/types.ts';
-import { isValidReminderWorkerAuthorization, processDueWhatsAppAppointmentReminders, processDueInAppAppointmentReminders } from '../server/appointmentReminderWorker.ts';
+import { isValidReminderWorkerAuthorization, processDueWhatsAppAppointmentReminders, processDueInAppAppointmentReminders, processDueIntouchSmsAppointmentReminders } from '../server/appointmentReminderWorker.ts';
 import { buildAppointmentReminderTemplatePayload, isReminderAppointmentCurrent } from '../server/appointmentReminderDelivery.ts';
+import { buildIntouchAppointmentSmsMessage, sendIntouchAppointmentSms } from '../server/appointmentSmsDelivery.ts';
 
 function makeTestBusiness(overrides: Partial<BusinessProfile>): BusinessProfile {
   return {
@@ -650,5 +651,61 @@ describe('ISHYA WhatsApp reminder worker configuration and safety', () => {
   it('exports bounded WhatsApp and in-app worker processors', () => {
     assert.equal(typeof processDueWhatsAppAppointmentReminders, 'function');
     assert.equal(typeof processDueInAppAppointmentReminders, 'function');
+  });
+});
+
+
+describe('ISHYA IntouchSMS appointment reminder adapter', () => {
+  const smsInput = {
+    customerName: 'Aline',
+    businessName: 'ISHYA Salon',
+    serviceName: 'Hair styling',
+    startAt: '2027-01-15T10:00:00.000Z',
+    timeZone: 'Africa/Kigali',
+    language: 'en' as const,
+  };
+
+  it('builds localized appointment reminders and sends with HTTP Basic authentication', async () => {
+    assert.match(buildIntouchAppointmentSmsMessage(smsInput), /ISHYA: reminder for Aline/);
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const result = await sendIntouchAppointmentSms('+250788123456', smsInput, {
+      username: 'test-user',
+      password: 'test-password',
+      senderId: 'ISHYA',
+    }, async (url, init) => {
+      capturedUrl = String(url);
+      capturedInit = init;
+      return new Response(JSON.stringify({
+        success: true,
+        details: [{ status: 'P', messageid: 12345 }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    assert.equal(capturedUrl, 'https://www.intouchsms.co.rw/api/sendsms/.json');
+    assert.equal(capturedInit?.method, 'POST');
+    assert.match(String((capturedInit?.headers as Record<string, string>).Authorization), /^Basic /);
+    assert.match(String(capturedInit?.body), /recipients=%2B250788123456/);
+    assert.deepEqual(result, { messageId: '12345', providerStatus: 'P' });
+  });
+
+  it('rejects invalid recipients, sender IDs and unsuccessful provider responses', async () => {
+    await assert.rejects(
+      sendIntouchAppointmentSms('0788123456', smsInput, { username: 'u', password: 'p', senderId: 'ISHYA' }),
+      /recipient/
+    );
+    await assert.rejects(
+      sendIntouchAppointmentSms('+250788123456', smsInput, { username: 'u', password: 'p', senderId: 'ISHYA BRAND' }),
+      /sender ID/
+    );
+    await assert.rejects(
+      sendIntouchAppointmentSms('+250788123456', smsInput, { username: 'u', password: 'p', senderId: 'ISHYA' }, async () =>
+        new Response(JSON.stringify({ success: false, details: [{ status: 'E' }] }), { status: 400 })
+      ),
+      /rejected/
+    );
+  });
+
+  it('exposes the bounded IntouchSMS worker processor', () => {
+    assert.equal(typeof processDueIntouchSmsAppointmentReminders, 'function');
   });
 });
