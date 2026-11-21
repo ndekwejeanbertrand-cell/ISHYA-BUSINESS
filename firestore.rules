@@ -102,6 +102,10 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/businesses/$(data.businessId)).data.ownerId == data.ownerId;
     }
 
+    function belongsToBusiness(data) {
+      return exists(/databases/$(database)/documents/businesses/$(data.businessId))
+        && get(/databases/$(database)/documents/businesses/$(data.businessId)).data.ownerId == data.ownerId;
+    }
     function isValidAppointment(data, appointmentId) {
       return data.keys().hasAll(['id', 'businessId', 'ownerId', 'customerUid', 'customerName', 'customerPhone', 'serviceId', 'serviceName', 'startAt', 'endAt', 'timeZone', 'language', 'requestedBy', 'status', 'notificationChannels', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['id', 'businessId', 'ownerId', 'customerUid', 'customerName', 'customerPhone', 'customerEmail', 'serviceId', 'serviceName', 'startAt', 'endAt', 'timeZone', 'language', 'requestedBy', 'status', 'notificationChannels', 'customerNote', 'createdAt', 'updatedAt'])
@@ -124,9 +128,9 @@ service cloud.firestore {
 
     match /appointments/{appointmentId} {
       allow get, list: if isSignedIn() && (resource.data.customerUid == request.auth.uid || isAppointmentOwner(resource.data));
-      allow create: if isEmailVerified() && isValidAppointment(incoming(), appointmentId) && isAppointmentOwner(incoming())
+      allow create: if isEmailVerified() && isValidAppointment(incoming(), appointmentId) && belongsToBusiness(incoming())
         && ((incoming().requestedBy == 'customer' && incoming().customerUid == request.auth.uid && incoming().status == 'pending')
-          || (incoming().requestedBy == 'owner' && incoming().status == 'confirmed'))
+          || (incoming().requestedBy == 'owner' && isAppointmentOwner(incoming()) && incoming().status == 'confirmed'))
         && incoming().createdAt == request.time && incoming().updatedAt == request.time;
       allow update: if isEmailVerified() && isAppointmentOwner(existing()) && isValidAppointment(incoming(), appointmentId)
         && incoming().id == existing().id && incoming().businessId == existing().businessId
