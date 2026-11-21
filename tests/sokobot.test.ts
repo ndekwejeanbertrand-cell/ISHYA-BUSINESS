@@ -492,3 +492,24 @@ describe('ISHYA Business — Appointment domain and reminders', () => {
     assert.deepEqual(lateJobs.map((job) => job.offset), ['30m']);
   });
 });
+
+
+import { getGoogleServiceAccountAccessToken, resetGoogleServiceAccountTokenCache } from '../server/googleServiceAccount.ts';
+
+describe('ISHYA server credentials', () => {
+  it('fails closed when the server-only Firebase service account secret is absent', async () => {
+    const original = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    resetGoogleServiceAccountTokenCache();
+    try {
+      await assert.rejects(
+        () => getGoogleServiceAccountAccessToken(),
+        /FIREBASE_SERVICE_ACCOUNT_JSON is not configured/
+      );
+    } finally {
+      if (original === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+      else process.env.FIREBASE_SERVICE_ACCOUNT_JSON = original;
+      resetGoogleServiceAccountTokenCache();
+    }
+  });
+});
