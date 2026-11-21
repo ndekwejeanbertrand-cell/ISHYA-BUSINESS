@@ -84,47 +84,48 @@ export function registerAppointmentRoutes(app: Express) {
         ...(input.customerNote ? { customerNote: input.customerNote } : {}),
       };
 
-      const begin = await fsReq(':beginTransaction', token, { method: 'POST', body: JSON.stringify({ options: { readWrite: {} } }) });
-      if (!begin.ok) throw new Error(`Transaction start failed (${begin.status}).`);
-      const { transaction } = await begin.json() as { transaction: string };
-      const query = await fsReq(':runQuery', token, {
-        method: 'POST',
-        body: JSON.stringify({
-          structuredQuery: {
-            from: [{ collectionId: 'appointments' }],
-            where: { fieldFilter: { field: { fieldPath: 'businessId' }, op: 'EQUAL', value: { stringValue: businessId } } },
-            limit: 1000,
-          },
-          transaction,
-        }),
-      });
-      if (!query.ok) throw new Error(`Appointment conflict check failed (${query.status}).`);
-      const rows = await query.json() as Array<{ document?: Doc }>;
-      if (rows.length >= 1000) {
-        await fsReq(':rollback', token, { method: 'POST', body: JSON.stringify({ transaction }) });
-        res.status(503).json({ error: 'The appointment calendar is too large to verify safely. Please contact the business.' }); return;
+      let transaction: string | undefined;
+      if (requestedBy === 'owner') {
+        const begin = await fsReq(':beginTransaction', token, { method: 'POST', body: JSON.stringify({ options: { readWrite: {} } }) });
+        if (!begin.ok) throw new Error(`Transaction start failed (${begin.status}).`);
+        transaction = (await begin.json() as { transaction: string }).transaction;
+        const query = await fsReq(':runQuery', token, {
+          method: 'POST',
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: 'appointments' }],
+              where: { fieldFilter: { field: { fieldPath: 'businessId' }, op: 'EQUAL', value: { stringValue: businessId } } },
+              limit: 1000,
+            },
+            transaction,
+          }),
+        });
+        if (!query.ok) throw new Error(`Appointment conflict check failed (${query.status}).`);
+        const rows = await query.json() as Array<{ document?: Doc }>;
+        if (rows.length >= 1000) {
+          await fsReq(':rollback', token, { method: 'POST', body: JSON.stringify({ transaction }) });
+          res.status(503).json({ error: 'The appointment calendar is too large to verify safely. Please contact the business.' }); return;
+        }
+        const conflict = rows.some((row) => {
+          if (!row.document) return false;
+          const old = unpack(row.document);
+          return ['pending', 'confirmed'].includes(String(old.status))
+            && Date.parse(String(old.startAt)) < Date.parse(input.endAt)
+            && Date.parse(String(old.endAt)) > Date.parse(input.startAt);
+        });
+        if (conflict) {
+          await fsReq(':rollback', token, { method: 'POST', body: JSON.stringify({ transaction }) });
+          res.status(409).json({ error: 'This time is already requested or booked. Please choose another time.' }); return;
+        }
       }
-      const conflict = rows.some((row) => {
-        if (!row.document) return false;
-        const old = unpack(row.document);
-        return ['pending', 'confirmed'].includes(String(old.status))
-          && Date.parse(String(old.startAt)) < Date.parse(input.endAt)
-          && Date.parse(String(old.endAt)) > Date.parse(input.startAt);
-      });
-      if (conflict) {
-        await fsReq(':rollback', token, { method: 'POST', body: JSON.stringify({ transaction }) });
-        res.status(409).json({ error: 'This time is already requested or booked. Please choose another time.' }); return;
-      }
+      const write = {
+        update: { name: `${root}/appointments/${id}`, fields: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, encode(v)])) },
+        updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }, { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        currentDocument: { exists: false },
+      };
       const commit = await fsReq(':commit', token, {
         method: 'POST',
-        body: JSON.stringify({
-          transaction,
-          writes: [{
-            update: { name: `${root}/appointments/${id}`, fields: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, encode(v)])) },
-            updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }, { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
-            currentDocument: { exists: false },
-          }],
-        }),
+        body: JSON.stringify({ ...(transaction ? { transaction } : {}), writes: [write] }),
       });
       if (!commit.ok) throw new Error(`Appointment save failed (${commit.status}).`);
       const now = new Date().toISOString();
