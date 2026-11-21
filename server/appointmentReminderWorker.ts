@@ -10,6 +10,7 @@ import {
   releaseAppointmentReminderClaim,
 } from './appointmentReminderQueue.ts';
 import { isReminderAppointmentCurrent, sendMetaWhatsAppAppointmentTemplate } from './appointmentReminderDelivery.ts';
+import { sendIntouchAppointmentSms } from './appointmentSmsDelivery.ts';
 
 export function isValidReminderWorkerAuthorization(
   authorizationHeader: string | undefined,
@@ -77,6 +78,63 @@ export async function processDueWhatsAppAppointmentReminders(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown reminder delivery error.';
+      if (job.attemptCount >= 5) {
+        if (await finalizeAppointmentReminderClaim(job.id, job.leaseToken, 'failed', { errorMessage: message })) summary.failed += 1;
+      } else {
+        const nextAttemptAt = new Date(now + getReminderRetryDelayMs(job.attemptCount)).toISOString();
+        if (await releaseAppointmentReminderClaim(job.id, job.leaseToken, nextAttemptAt, message)) summary.retried += 1;
+      }
+    }
+  }
+  return summary;
+}
+
+
+/** Processes only IntouchSMS jobs; jobs remain queued until credentials are configured. */
+export async function processDueIntouchSmsAppointmentReminders(
+  now = Date.now(),
+  limit = 20,
+  fetchImpl: typeof fetch = fetch
+): Promise<ReminderWorkerSummary> {
+  const recovered = await recoverExpiredAppointmentReminderClaims(now, 50);
+  const jobs = await claimDueAppointmentReminderJobs(now, { limit, channel: 'sms' });
+  const summary: ReminderWorkerSummary = {
+    recovered, claimed: jobs.length, sent: 0, cancelled: 0, retried: 0, failed: 0,
+  };
+
+  for (const job of jobs) {
+    try {
+      const current = await getCurrentReminderAppointment(String(job.record.appointmentId ?? ''));
+      if (!isReminderAppointmentCurrent(job.record, current)) {
+        if (await finalizeAppointmentReminderClaim(job.id, job.leaseToken, 'cancelled', {
+          errorMessage: 'Appointment is no longer confirmed at the originally scheduled time.',
+        })) summary.cancelled += 1;
+        continue;
+      }
+
+      const sent = await sendIntouchAppointmentSms(
+        String(current?.customerPhone ?? job.record.customerPhone ?? ''),
+        {
+          customerName: String(current?.customerName ?? job.record.customerName ?? ''),
+          serviceName: String(current?.serviceName ?? job.record.serviceName ?? ''),
+          businessName: String(current?.businessName ?? job.record.businessName ?? ''),
+          startAt: String(current!.startAt),
+          timeZone: String(current?.timeZone ?? job.record.timeZone ?? 'Africa/Kigali'),
+          language: current?.language ?? (job.record.language === 'rw' || job.record.language === 'fr' ? job.record.language : 'en'),
+        },
+        {
+          username: process.env.INTOUCH_SMS_USERNAME,
+          password: process.env.INTOUCH_SMS_PASSWORD,
+          senderId: process.env.INTOUCH_SMS_SENDER_ID,
+        },
+        fetchImpl
+      );
+
+      if (await finalizeAppointmentReminderClaim(job.id, job.leaseToken, 'sent', { messageId: sent.messageId })) {
+        summary.sent += 1;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown SMS delivery error.';
       if (job.attemptCount >= 5) {
         if (await finalizeAppointmentReminderClaim(job.id, job.leaseToken, 'failed', { errorMessage: message })) summary.failed += 1;
       } else {
@@ -161,13 +219,26 @@ export function registerAppointmentReminderWorkerRoutes(app: Express): void {
       const whatsappSummary = whatsappConfigured
         ? await processDueWhatsAppAppointmentReminders(Date.now(), limit)
         : null;
+      const intouchSmsConfigured = [
+        process.env.INTOUCH_SMS_USERNAME,
+        process.env.INTOUCH_SMS_PASSWORD,
+        process.env.INTOUCH_SMS_SENDER_ID,
+      ].every((value) => Boolean(value?.trim()));
+      const smsSummary = intouchSmsConfigured
+        ? await processDueIntouchSmsAppointmentReminders(Date.now(), limit)
+        : null;
       res.json({
-        status: whatsappConfigured ? 'ok' : 'partial',
+        status: whatsappConfigured && intouchSmsConfigured ? 'ok' : 'partial',
         deliveryConfigured: true,
         channels: {
           app: { enabled: true, summary: appSummary },
           whatsapp: { enabled: whatsappConfigured, summary: whatsappSummary },
-          sms: { enabled: false, reason: 'SMS provider has not been configured.' },
+          sms: {
+            enabled: intouchSmsConfigured,
+            provider: 'IntouchSMS',
+            summary: smsSummary,
+            ...(!intouchSmsConfigured ? { reason: 'IntouchSMS credentials or approved sender ID are not configured.' } : {}),
+          },
         },
       });
     } catch (error) {
