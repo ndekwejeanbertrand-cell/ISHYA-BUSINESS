@@ -13,6 +13,7 @@ import {
 } from './server/firestoreRest.ts';
 import { SlidingWindowRateLimiter } from './server/rateLimit.ts';
 import { registerAppointmentRoutes } from './server/appointmentApi.ts';
+import { registerAppointmentReminderWorkerRoutes } from './server/appointmentReminderWorker.ts';
 import {
   extractIncomingWhatsAppMessages,
   findBusinessIdByPhoneNumberId,
@@ -123,6 +124,7 @@ async function startServer() {
 
   // Appointment booking, customer listing and business-owner approval routes
   registerAppointmentRoutes(app);
+  registerAppointmentReminderWorkerRoutes(app);
 
   // Grounded multilingual AI customer chat (strictly scoped to one businessId)
   app.post('/api/chat', async (req, res) => {
