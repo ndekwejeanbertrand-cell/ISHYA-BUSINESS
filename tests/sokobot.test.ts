@@ -34,6 +34,7 @@ import {
 } from '../server/locations.ts';
 import type { BusinessProfile } from '../src/types.ts';
 import { isValidReminderWorkerAuthorization } from '../server/appointmentReminderWorker.ts';
+import { buildAppointmentReminderTemplatePayload, isReminderAppointmentCurrent } from '../server/appointmentReminderDelivery.ts';
 
 function makeTestBusiness(overrides: Partial<BusinessProfile>): BusinessProfile {
   return {
@@ -595,5 +596,51 @@ describe('ISHYA reminder worker authentication', () => {
     assert.equal(isValidReminderWorkerAuthorization(undefined, secret), false);
     assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, undefined), false);
     assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, 'short'), false);
+  });
+});
+
+
+describe('ISHYA WhatsApp appointment reminder adapter', () => {
+  const templateInput = {
+    customerName: 'Aline',
+    businessName: 'ISHYA Salon',
+    serviceName: 'Hair styling',
+    startAt: '2027-01-15T10:00:00.000Z',
+    timeZone: 'Africa/Kigali',
+    language: 'en' as const,
+  };
+
+  it('builds the approved four-parameter WhatsApp template payload', () => {
+    const payload = buildAppointmentReminderTemplatePayload(
+      '+250788123456',
+      templateInput,
+      'appointment_reminder',
+      'en'
+    );
+    assert.equal(payload.to, '250788123456');
+    assert.equal(payload.template.name, 'appointment_reminder');
+    assert.equal(payload.template.components[0].parameters.length, 4);
+    assert.deepEqual(
+      payload.template.components[0].parameters.slice(0, 3).map((item) => item.text),
+      ['Aline', 'ISHYA Salon', 'Hair styling']
+    );
+  });
+
+  it('rejects invalid recipients and incomplete template data', () => {
+    assert.throws(
+      () => buildAppointmentReminderTemplatePayload('0788123456', templateInput, 'appointment_reminder', 'en'),
+      /recipient/
+    );
+    assert.throws(
+      () => buildAppointmentReminderTemplatePayload('+250788123456', { ...templateInput, businessName: '' }, 'appointment_reminder', 'en'),
+      /incomplete/
+    );
+  });
+
+  it('requires the appointment to remain confirmed and at the queued start time', () => {
+    const queued = { appointmentId: 'apt_1', appointmentStartAt: templateInput.startAt };
+    assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'confirmed', startAt: templateInput.startAt }), true);
+    assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'cancelled', startAt: templateInput.startAt }), false);
+    assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'confirmed', startAt: '2027-01-16T10:00:00.000Z' }), false);
   });
 });
