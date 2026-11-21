@@ -86,3 +86,36 @@ export interface ChatMessage {
   detectedLanguage?: Language;
   timestamp: string;
 }
+
+
+export type AppointmentStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'declined'
+  | 'cancelled'
+  | 'completed'
+  | 'no_show';
+
+export type AppointmentNotificationChannel = 'whatsapp' | 'sms' | 'app';
+
+export interface Appointment {
+  id: string;
+  businessId: string;
+  ownerId: string;
+  customerUid: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  serviceId: string;
+  serviceName: string;
+  startAt: string;
+  endAt: string;
+  timeZone: string;
+  language: Language;
+  requestedBy: 'customer' | 'owner';
+  status: AppointmentStatus;
+  notificationChannels: AppointmentNotificationChannel[];
+  customerNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
