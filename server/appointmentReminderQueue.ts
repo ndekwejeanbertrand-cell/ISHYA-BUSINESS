@@ -197,6 +197,67 @@ export async function claimDueAppointmentReminderJobs(
   return claimed;
 }
 
+
+/** Exponential retry delay with a cap; attempt 1 waits 1 minute. */
+export function getReminderRetryDelayMs(attemptCount: number): number {
+  const attempt = Math.max(1, Math.min(10, Math.floor(Number.isFinite(attemptCount) ? attemptCount : 1)));
+  return Math.min(60 * 60_000, 60_000 * (2 ** (attempt - 1)));
+}
+
+/**
+ * Returns abandoned processing jobs to pending after their lease expires.
+ * Firestore updateTime preconditions prevent overwriting a concurrently renewed lease.
+ */
+export async function recoverExpiredAppointmentReminderClaims(
+  now = Date.now(),
+  limit = 50
+): Promise<number> {
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit)));
+  const query = await firestoreRequest(':runQuery', {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: REMINDER_COLLECTION }],
+        where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'processing' } } },
+        limit: 250,
+      },
+    }),
+  });
+  if (!query.ok) throw new Error(`Expired reminder lease lookup failed (HTTP ${query.status}).`);
+  const rows = await query.json() as Array<{ document?: FirestoreDocument }>;
+  const expired = rows.map((row) => row.document).filter((doc): doc is FirestoreDocument => Boolean(doc?.name && doc.updateTime))
+    .map((doc) => ({ doc, record: unpack(doc) }))
+    .filter(({ record }) => typeof record.leaseUntil === 'string' && Date.parse(String(record.leaseUntil)) <= now)
+    .slice(0, safeLimit);
+  let recovered = 0;
+  for (const { doc, record } of expired) {
+    const response = await firestoreRequest(':commit', {
+      method: 'POST',
+      body: JSON.stringify({
+        writes: [{
+          update: {
+            name: doc.name,
+            fields: {
+              status: encode('pending'),
+              nextAttemptAt: encode(new Date(now).toISOString()),
+              leaseToken: encode(null),
+              leaseUntil: encode(null),
+              lastError: encode('Previous worker lease expired before delivery completed.'),
+              updatedAt: encode(new Date(now).toISOString()),
+            },
+          },
+          updateMask: { fieldPaths: ['status', 'nextAttemptAt', 'leaseToken', 'leaseUntil', 'lastError', 'updatedAt'] },
+          currentDocument: { updateTime: doc.updateTime },
+        }],
+      }),
+    });
+    if (response.status === 409 || response.status === 412) continue;
+    if (!response.ok) throw new Error(`Expired reminder lease recovery failed (HTTP ${response.status}).`);
+    recovered += 1;
+  }
+  return recovered;
+}
+
 /** Releases a claimed job only when the caller still owns its lease token. */
 export async function releaseAppointmentReminderClaim(
   id: string,
