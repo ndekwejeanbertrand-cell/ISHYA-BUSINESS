@@ -219,26 +219,12 @@ export function registerAppointmentReminderWorkerRoutes(app: Express): void {
       const whatsappSummary = whatsappConfigured
         ? await processDueWhatsAppAppointmentReminders(Date.now(), limit)
         : null;
-      const intouchSmsConfigured = [
-        process.env.INTOUCH_SMS_USERNAME,
-        process.env.INTOUCH_SMS_PASSWORD,
-        process.env.INTOUCH_SMS_SENDER_ID,
-      ].every((value) => Boolean(value?.trim()));
-      const smsSummary = intouchSmsConfigured
-        ? await processDueIntouchSmsAppointmentReminders(Date.now(), limit)
-        : null;
       res.json({
-        status: whatsappConfigured && intouchSmsConfigured ? 'ok' : 'partial',
+        status: whatsappConfigured ? 'ok' : 'partial',
         deliveryConfigured: true,
         channels: {
           app: { enabled: true, summary: appSummary },
           whatsapp: { enabled: whatsappConfigured, summary: whatsappSummary },
-          sms: {
-            enabled: intouchSmsConfigured,
-            provider: 'IntouchSMS',
-            summary: smsSummary,
-            ...(!intouchSmsConfigured ? { reason: 'IntouchSMS credentials or approved sender ID are not configured.' } : {}),
-          },
         },
       });
     } catch (error) {
