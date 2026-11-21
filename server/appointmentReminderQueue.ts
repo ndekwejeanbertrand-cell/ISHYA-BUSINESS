@@ -64,7 +64,8 @@ export interface ConfirmedAppointmentForReminders {
 export function buildReminderQueueRecords(appointment: ConfirmedAppointmentForReminders, now = Date.now()) {
   return buildAppointmentReminderJobs(appointment, now).flatMap((job) =>
     job.channels.map((channel) => ({
-      id: [job.appointmentId, job.offset, channel].join('_'),
+      // Include the appointment start time so a reschedule creates a fresh reminder set.
+      id: [job.appointmentId, Date.parse(appointment.startAt), job.offset, channel].join('_'),
       appointmentId: job.appointmentId,
       businessId: job.businessId,
       customerUid: job.customerUid,
