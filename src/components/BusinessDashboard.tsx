@@ -32,6 +32,7 @@ import { formatUserFriendlyError } from '../utils/errorFormat';
 import { CategorySelect } from './CategorySelect';
 import { CountrySelect } from './CountrySelect';
 import { CitySelect } from './CitySelect';
+import { AppointmentManager } from './AppointmentManager';
 
 interface BusinessDashboardProps {
   user: User | null;
@@ -658,6 +659,7 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({
         )
       ) : (
         <>
+          <AppointmentManager businessId={draft.id} idToken={idToken} language={language} />
           <form onSubmit={handleSave} className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <section className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 space-y-4">
