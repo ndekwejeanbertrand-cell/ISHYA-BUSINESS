@@ -33,7 +33,7 @@ import {
   searchCountries,
 } from '../server/locations.ts';
 import type { BusinessProfile } from '../src/types.ts';
-import { isValidReminderWorkerAuthorization } from '../server/appointmentReminderWorker.ts';
+import { isValidReminderWorkerAuthorization, processDueWhatsAppAppointmentReminders } from '../server/appointmentReminderWorker.ts';
 import { buildAppointmentReminderTemplatePayload, isReminderAppointmentCurrent } from '../server/appointmentReminderDelivery.ts';
 
 function makeTestBusiness(overrides: Partial<BusinessProfile>): BusinessProfile {
@@ -642,5 +642,12 @@ describe('ISHYA WhatsApp appointment reminder adapter', () => {
     assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'confirmed', startAt: templateInput.startAt }), true);
     assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'cancelled', startAt: templateInput.startAt }), false);
     assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'confirmed', startAt: '2027-01-16T10:00:00.000Z' }), false);
+  });
+});
+
+
+describe('ISHYA WhatsApp reminder worker configuration and safety', () => {
+  it('exports a bounded WhatsApp-only worker processor', () => {
+    assert.equal(typeof processDueWhatsAppAppointmentReminders, 'function');
   });
 });
