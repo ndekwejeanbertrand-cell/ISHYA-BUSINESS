@@ -254,7 +254,7 @@ export function registerAppointmentRoutes(app: Express) {
       try {
         if (patch.status === 'confirmed' || patch.startAt !== undefined || patch.endAt !== undefined) {
           await cancelPendingAppointmentReminders(id);
-          await enqueueAppointmentReminders({ ...current, ...patch } as Parameters<typeof enqueueAppointmentReminders>[0]);
+          await enqueueAppointmentReminders({ ...current, ...patch } as unknown as Parameters<typeof enqueueAppointmentReminders>[0]);
           remindersQueued = true;
         } else if (['declined', 'cancelled', 'completed', 'no_show'].includes(String(patch.status))) {
           await cancelPendingAppointmentReminders(id);
