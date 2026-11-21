@@ -423,3 +423,72 @@ describe('ISHYA Business — Worldwide Countries, Regions & Dependent Cities', (
     assert.ok(txCities.cities.some((c) => c.name === 'Austin'));
   });
 });
+
+
+import {
+  AppointmentValidationError,
+  buildAppointmentReminderJobs,
+  parseServiceDurationMinutes,
+  validateAppointmentRequest,
+} from '../server/appointments.ts';
+
+describe('ISHYA Business — Appointment domain and reminders', () => {
+  const request = {
+    businessId: 'biz_123',
+    serviceId: 'service_1',
+    customerUid: 'customer_1',
+    customerName: 'Aline Customer',
+    customerPhone: '+250788123456',
+    startAt: '2027-01-15T10:00:00.000Z',
+    endAt: '2027-01-15T11:00:00.000Z',
+    timeZone: 'Africa/Kigali',
+    language: 'rw',
+    requestedBy: 'customer',
+    notificationChannels: ['whatsapp', 'app'],
+  };
+
+  it('parses explicit service durations and refuses ambiguous units', () => {
+    assert.equal(parseServiceDurationMinutes('45 mins'), 45);
+    assert.equal(parseServiceDurationMinutes('1 hour'), 60);
+    assert.equal(parseServiceDurationMinutes('2 hrs'), 120);
+    assert.equal(parseServiceDurationMinutes('Unit'), null);
+    assert.equal(parseServiceDurationMinutes(''), null);
+  });
+
+  it('validates future appointment requests and normalizes timestamps', () => {
+    const result = validateAppointmentRequest(request, Date.parse('2027-01-01T00:00:00Z'));
+    assert.equal(result.startAt, '2027-01-15T10:00:00.000Z');
+    assert.deepEqual(result.notificationChannels, ['whatsapp', 'app']);
+  });
+
+  it('rejects invalid phone numbers, unsupported time zones, and past appointments', () => {
+    assert.throws(
+      () => validateAppointmentRequest({ ...request, customerPhone: '0788123456' }, 0),
+      AppointmentValidationError
+    );
+    assert.throws(
+      () => validateAppointmentRequest({ ...request, timeZone: 'Mars/Phobos' }, 0),
+      AppointmentValidationError
+    );
+    assert.throws(
+      () => validateAppointmentRequest(request, Date.parse('2027-02-01T00:00:00Z')),
+      AppointmentValidationError
+    );
+  });
+
+  it('creates reminders only for confirmed appointments and only for future deadlines', () => {
+    const base = {
+      id: 'appt_1',
+      businessId: 'biz_123',
+      customerUid: 'customer_1',
+      startAt: '2027-01-15T10:00:00.000Z',
+      notificationChannels: ['whatsapp', 'app'] as const,
+    };
+    assert.deepEqual(buildAppointmentReminderJobs({ ...base, status: 'pending' }, 0), []);
+    const jobs = buildAppointmentReminderJobs({ ...base, status: 'confirmed' }, Date.parse('2027-01-14T09:30:00Z'));
+    assert.deepEqual(jobs.map((job) => job.offset), ['24h', '1h', '30m']);
+    assert.deepEqual(jobs[0].channels, ['whatsapp', 'app']);
+    const lateJobs = buildAppointmentReminderJobs({ ...base, status: 'confirmed' }, Date.parse('2027-01-15T09:15:00Z'));
+    assert.deepEqual(lateJobs.map((job) => job.offset), ['30m']);
+  });
+});
