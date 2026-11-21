@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { getGoogleServiceAccountAccessToken } from './googleServiceAccount.ts';
 import { buildAppointmentReminderJobs, type AppointmentNotificationChannel } from './appointments.ts';
 import { getFirebaseConfig } from './auth.ts';
@@ -127,6 +128,112 @@ export async function enqueueAppointmentReminders(
   });
   if (!response.ok) throw new Error(`Reminder queue write failed (HTTP ${response.status}).`);
   return { created: missing.length, existing: records.length - missing.length };
+}
+
+
+export interface ClaimedReminderJob {
+  id: string;
+  leaseToken: string;
+  leaseUntil: string;
+  attemptCount: number;
+  record: Record<string, unknown>;
+}
+
+/** Atomically claims due jobs using Firestore updateTime preconditions. */
+export async function claimDueAppointmentReminderJobs(
+  now = Date.now(),
+  options: { limit?: number; leaseMs?: number } = {}
+): Promise<ClaimedReminderJob[]> {
+  const limit = Math.min(50, Math.max(1, Math.floor(options.limit ?? 20)));
+  const leaseMs = Math.min(15 * 60_000, Math.max(30_000, options.leaseMs ?? 5 * 60_000));
+  const query = await firestoreRequest(':runQuery', {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: REMINDER_COLLECTION }],
+        where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } } },
+        limit: 250,
+      },
+    }),
+  });
+  if (!query.ok) throw new Error(`Reminder worker lookup failed (HTTP ${query.status}).`);
+  const rows = await query.json() as Array<{ document?: FirestoreDocument }>;
+  const due = rows.map((row) => row.document).filter((doc): doc is FirestoreDocument => Boolean(doc?.name && doc.updateTime))
+    .map((doc) => ({ doc, record: unpack(doc) }))
+    .filter(({ record }) => typeof record.nextAttemptAt === 'string' && Date.parse(String(record.nextAttemptAt)) <= now)
+    .sort((a, b) => Date.parse(String(a.record.nextAttemptAt)) - Date.parse(String(b.record.nextAttemptAt)))
+    .slice(0, limit);
+
+  const claimed: ClaimedReminderJob[] = [];
+  for (const item of due) {
+    const id = item.doc.name!.split('/').pop()!;
+    const leaseToken = crypto.randomUUID();
+    const leaseUntil = new Date(now + leaseMs).toISOString();
+    const attemptCount = Number(item.record.attemptCount ?? 0) + 1;
+    const response = await firestoreRequest(':commit', {
+      method: 'POST',
+      body: JSON.stringify({
+        writes: [{
+          update: {
+            name: item.doc.name,
+            fields: {
+              status: encode('processing'),
+              leaseToken: encode(leaseToken),
+              leaseUntil: encode(leaseUntil),
+              attemptCount: encode(attemptCount),
+              updatedAt: encode(new Date(now).toISOString()),
+            },
+          },
+          updateMask: { fieldPaths: ['status', 'leaseToken', 'leaseUntil', 'attemptCount', 'updatedAt'] },
+          currentDocument: { updateTime: item.doc.updateTime },
+        }],
+      }),
+    });
+    // A failed precondition means another worker won the claim; skip it.
+    if (response.status === 409 || response.status === 412) continue;
+    if (!response.ok) throw new Error(`Reminder job claim failed (HTTP ${response.status}).`);
+    claimed.push({ id, leaseToken, leaseUntil, attemptCount, record: item.record });
+  }
+  return claimed;
+}
+
+/** Releases a claimed job only when the caller still owns its lease token. */
+export async function releaseAppointmentReminderClaim(
+  id: string,
+  leaseToken: string,
+  nextAttemptAt: string,
+  errorMessage: string
+): Promise<boolean> {
+  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(id) || !leaseToken) throw new Error('Invalid reminder claim.');
+  const get = await firestoreRequest(`/${REMINDER_COLLECTION}/${encodeURIComponent(id)}`);
+  if (get.status === 404) return false;
+  if (!get.ok) throw new Error(`Reminder claim read failed (HTTP ${get.status}).`);
+  const doc = await get.json() as FirestoreDocument;
+  const record = unpack(doc);
+  if (record.status !== 'processing' || record.leaseToken !== leaseToken || !doc.updateTime) return false;
+  const response = await firestoreRequest(':commit', {
+    method: 'POST',
+    body: JSON.stringify({
+      writes: [{
+        update: {
+          name: doc.name,
+          fields: {
+            status: encode('pending'),
+            nextAttemptAt: encode(nextAttemptAt),
+            lastError: encode(errorMessage.slice(0, 500)),
+            leaseToken: encode(null),
+            leaseUntil: encode(null),
+            updatedAt: encode(new Date().toISOString()),
+          },
+        },
+        updateMask: { fieldPaths: ['status', 'nextAttemptAt', 'lastError', 'leaseToken', 'leaseUntil', 'updatedAt'] },
+        currentDocument: { updateTime: doc.updateTime },
+      }],
+    }),
+  });
+  if (response.status === 409 || response.status === 412) return false;
+  if (!response.ok) throw new Error(`Reminder claim release failed (HTTP ${response.status}).`);
+  return true;
 }
 
 /** Cancels only jobs that have not started delivery. */
