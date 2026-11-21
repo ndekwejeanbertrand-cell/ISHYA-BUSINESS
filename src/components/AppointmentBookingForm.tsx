@@ -196,6 +196,11 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
 
   useEffect(() => { void loadMyAppointments(); }, [loadMyAppointments]);
   useEffect(() => { void loadNotifications(); }, [loadNotifications]);
+  useEffect(() => {
+    if (!idToken || !emailVerified) return;
+    const interval = window.setInterval(() => { void loadNotifications(); }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [idToken, emailVerified, loadNotifications]);
 
   const markNotificationRead = async (notificationId: string) => {
     if (!idToken) return;
@@ -326,7 +331,7 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
         </form>
       )}
       {canBook && (
-
+        <>
         <div className="border-t border-[#D9B96E]/30 pt-3 space-y-2">
           <h4 className="text-xs font-semibold text-[#101D35]">{t.notifications}</h4>
           {notifications.length === 0 ? (
@@ -368,6 +373,7 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
             </div>
           )}
         </div>
+        </>
       )}
     </section>
   );
