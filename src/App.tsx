@@ -355,6 +355,11 @@ export default function App() {
                 <BusinessInfoPanel
                   business={activeBusiness}
                   language={language}
+                  idToken={idToken}
+                  emailVerified={Boolean(user?.emailVerified)}
+                  customerName={user?.displayName || ''}
+                  customerEmail={user?.email || ''}
+                  onSignIn={() => void handleSignIn()}
                 />
               </div>
             </div>
