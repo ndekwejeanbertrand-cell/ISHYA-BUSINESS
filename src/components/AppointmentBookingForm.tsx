@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CalendarPlus, CheckCircle2, LockKeyhole } from 'lucide-react';
-import type { Appointment, Language, ServiceItem } from '../types';
+import type { Appointment, InAppNotification, Language, ServiceItem } from '../types';
 
 interface AppointmentBookingFormProps {
   businessId: string;
@@ -47,6 +47,9 @@ const text = {
     statusCancelled: 'Yahagaritswe',
     statusCompleted: 'Yarangiye',
     statusNoShow: 'Ntiyitabiriye',
+    notifications: 'Ubutumwa bukumenyesha',
+    noNotifications: 'Nta butumwa bushya burahari.',
+    markRead: 'Shyira mu byasomwe',
   },
   en: {
     title: 'Request an appointment',
@@ -81,6 +84,9 @@ const text = {
     statusCancelled: 'Cancelled',
     statusCompleted: 'Completed',
     statusNoShow: 'No-show',
+    notifications: 'Notifications',
+    noNotifications: 'No new notifications.',
+    markRead: 'Mark as read',
   },
   fr: {
     title: 'Demander un rendez-vous',
@@ -115,6 +121,9 @@ const text = {
     statusCancelled: 'Annulé',
     statusCompleted: 'Terminé',
     statusNoShow: 'Absent',
+    notifications: 'Notifications',
+    noNotifications: 'Aucune nouvelle notification.',
+    markRead: 'Marquer comme lu',
   },
 } as const;
 
@@ -149,6 +158,7 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
   const [success, setSuccess] = useState(false);
   const [myAppointments, setMyAppointments] = useState<Appointment[]>([]);
   const [loadingAppointments, setLoadingAppointments] = useState(false);
+  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
 
   const loadMyAppointments = useCallback(async () => {
     if (!idToken || !emailVerified) {
@@ -167,7 +177,37 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
     }
   }, [idToken, emailVerified]);
 
+
+  const loadNotifications = useCallback(async () => {
+    if (!idToken || !emailVerified) {
+      setNotifications([]);
+      return;
+    }
+    try {
+      const response = await fetch('/api/notifications?limit=10', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      const data = await response.json();
+      if (response.ok) setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
+    } catch {
+      // Booking remains usable if the notification inbox is temporarily unavailable.
+    }
+  }, [idToken, emailVerified]);
+
   useEffect(() => { void loadMyAppointments(); }, [loadMyAppointments]);
+  useEffect(() => { void loadNotifications(); }, [loadNotifications]);
+
+  const markNotificationRead = async (notificationId: string) => {
+    if (!idToken) return;
+    const response = await fetch(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (response.ok) {
+      setNotifications((current) => current.map((item) => item.id === notificationId ? { ...item, read: true } : item));
+    }
+  };
+
 
   const statusLabel = (status: Appointment['status']) => ({
     pending: t.statusPending,
@@ -286,6 +326,28 @@ export const AppointmentBookingForm: React.FC<AppointmentBookingFormProps> = ({
         </form>
       )}
       {canBook && (
+
+        <div className="border-t border-[#D9B96E]/30 pt-3 space-y-2">
+          <h4 className="text-xs font-semibold text-[#101D35]">{t.notifications}</h4>
+          {notifications.length === 0 ? (
+            <p className="text-xs text-slate-500">{t.noNotifications}</p>
+          ) : (
+            <div className="space-y-2">
+              {notifications.map((notification) => (
+                <div key={notification.id} className={`rounded-lg border px-3 py-2.5 ${notification.read ? 'border-slate-200 bg-white' : 'border-[#D9B96E]/60 bg-[#FFF9E9]'}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-[#101D35]">{notification.title}</p>
+                      <p className="mt-1 text-xs text-slate-600">{notification.body}</p>
+                      {notification.startAt && <p className="mt-1 text-[11px] text-slate-500">{new Intl.DateTimeFormat(language === 'rw' ? 'rw-RW' : language === 'fr' ? 'fr-FR' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: notification.timeZone || 'Africa/Kigali' }).format(new Date(notification.startAt))}</p>}
+                    </div>
+                    {!notification.read && <button type="button" onClick={() => void markNotificationRead(notification.id)} className="shrink-0 text-[10px] font-semibold text-[#7D611F] underline underline-offset-2">{t.markRead}</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="border-t border-[#D9B96E]/30 pt-3 space-y-2">
           <h4 className="text-xs font-semibold text-[#101D35]">{t.myRequests}</h4>
           {loadingAppointments ? (
