@@ -515,7 +515,7 @@ describe('ISHYA server credentials', () => {
 });
 
 
-import { buildReminderQueueRecords, releaseAppointmentReminderClaim } from '../server/appointmentReminderQueue.ts';
+import { buildReminderQueueRecords, getReminderRetryDelayMs, releaseAppointmentReminderClaim } from '../server/appointmentReminderQueue.ts';
 
 describe('ISHYA Business — durable reminder queue records', () => {
   const confirmed = {
@@ -555,6 +555,13 @@ describe('ISHYA Business — durable reminder queue records', () => {
     }, Date.parse('2027-01-14T08:00:00.000Z'));
     assert.notEqual(original[0].id, rescheduled[0].id);
     assert.ok(rescheduled[0].id.includes(String(Date.parse('2027-01-16T10:00:00.000Z'))));
+  });
+
+  it('calculates bounded exponential retry delays', () => {
+    assert.equal(getReminderRetryDelayMs(1), 60_000);
+    assert.equal(getReminderRetryDelayMs(2), 120_000);
+    assert.equal(getReminderRetryDelayMs(3), 240_000);
+    assert.equal(getReminderRetryDelayMs(99), 60 * 60_000);
   });
 
   it('requires a valid job ID and lease token before releasing a claim', async () => {
