@@ -238,9 +238,10 @@ service cloud.firestore {
       // Signed-in customers can submit requests; they cannot self-confirm.
       allow create: if isEmailVerified()
         && validAppointment(incoming(), appointmentId)
-        && incoming().customerUid == request.auth.uid
-        && incoming().status == 'pending'
-        && incoming().requestedBy == 'customer'
+        && (
+          (incoming().requestedBy == 'customer' && incoming().customerUid == request.auth.uid && incoming().status == 'pending')
+          || (incoming().requestedBy == 'owner' && isAppointmentOwner(incoming()) && incoming().status == 'confirmed')
+        )
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && isAppointmentOwner(incoming());
