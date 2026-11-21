@@ -5,15 +5,26 @@ import { TRANSLATIONS } from '../i18n';
 import { buildWhatsappUrl, formatRwf } from '../utils/whatsapp';
 import { getCategoryLabel } from '../constants/categories';
 import { countryCodeToFlag } from '../services/locationsApi';
+import { AppointmentBookingForm } from './AppointmentBookingForm';
 
 interface BusinessInfoPanelProps {
   business: BusinessProfile;
   language: Language;
+  idToken: string | null;
+  emailVerified: boolean;
+  customerName: string;
+  customerEmail: string;
+  onSignIn: () => void;
 }
 
 export const BusinessInfoPanel: React.FC<BusinessInfoPanelProps> = ({
   business,
   language,
+  idToken,
+  emailVerified,
+  customerName,
+  customerEmail,
+  onSignIn,
 }) => {
   const t = TRANSLATIONS[language];
   const whatsappUrl = buildWhatsappUrl(business, language);
@@ -141,6 +152,19 @@ export const BusinessInfoPanel: React.FC<BusinessInfoPanelProps> = ({
         </section>
 
         <hr className="border-slate-100" />
+
+        <hr className="border-slate-100" />
+
+        <AppointmentBookingForm
+          businessId={business.id}
+          services={business.services}
+          idToken={idToken}
+          emailVerified={emailVerified}
+          customerName={customerName}
+          customerEmail={customerEmail}
+          language={language}
+          onSignIn={onSignIn}
+        />
 
         {/* Opening Hours */}
         <section>
