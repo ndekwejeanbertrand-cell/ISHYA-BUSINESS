@@ -33,7 +33,7 @@ import {
   searchCountries,
 } from '../server/locations.ts';
 import type { BusinessProfile } from '../src/types.ts';
-import { isValidReminderWorkerAuthorization, processDueWhatsAppAppointmentReminders } from '../server/appointmentReminderWorker.ts';
+import { isValidReminderWorkerAuthorization, processDueWhatsAppAppointmentReminders, processDueInAppAppointmentReminders } from '../server/appointmentReminderWorker.ts';
 import { buildAppointmentReminderTemplatePayload, isReminderAppointmentCurrent } from '../server/appointmentReminderDelivery.ts';
 
 function makeTestBusiness(overrides: Partial<BusinessProfile>): BusinessProfile {
@@ -647,7 +647,8 @@ describe('ISHYA WhatsApp appointment reminder adapter', () => {
 
 
 describe('ISHYA WhatsApp reminder worker configuration and safety', () => {
-  it('exports a bounded WhatsApp-only worker processor', () => {
+  it('exports bounded WhatsApp and in-app worker processors', () => {
     assert.equal(typeof processDueWhatsAppAppointmentReminders, 'function');
+    assert.equal(typeof processDueInAppAppointmentReminders, 'function');
   });
 });
