@@ -538,8 +538,8 @@ describe('ISHYA Business — durable reminder queue records', () => {
     assert.deepEqual(jobs.map((job) => job.id), [
       'apt_queue_1_24h_whatsapp',
       'apt_queue_1_24h_app',
-      'apt_queue_1h_whatsapp',
-      'apt_queue_1h_app',
+      'apt_queue_1_1h_whatsapp',
+      'apt_queue_1_1h_app',
       'apt_queue_1_30m_whatsapp',
       'apt_queue_1_30m_app',
     ]);
