@@ -95,14 +95,14 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-
     function isAppointmentOwner(data) {
       return isSignedIn()
         && exists(/databases/$(database)/documents/businesses/$(data.businessId))
-        && get(/databases/$(database)/documents/businesses/$(data.businessId)).data.ownerId == request.auth.uid;
+        && get(/databases/$(database)/documents/businesses/$(data.businessId)).data.ownerId == request.auth.uid
+        && get(/databases/$(database)/documents/businesses/$(data.businessId)).data.ownerId == data.ownerId;
     }
 
-    function validAppointment(data, appointmentId) {
+    function isValidAppointment(data, appointmentId) {
       return data.keys().hasAll([
           'id', 'businessId', 'ownerId', 'customerUid', 'customerName',
           'customerPhone', 'serviceId', 'serviceName', 'startAt', 'endAt',
@@ -119,7 +119,7 @@ service cloud.firestore {
         && isValidId(data.businessId) && isValidId(data.ownerId)
         && isValidId(data.customerUid) && isValidId(data.serviceId)
         && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120
-        && data.customerPhone is string && data.customerPhone.matches('^\\+[1-9][0-9]{7,14}
+        && data.customerPhone is string && data.customerPhone.matches('^\\\\+[1-9][0-9]{7,14}
       allow get: if isSignedIn() && isValidId(ownerId) && request.auth.uid == ownerId;
       allow list: if false;
       allow create: if isEmailVerified()
@@ -219,7 +219,7 @@ service cloud.firestore {
 )
         && data.serviceName is string && data.serviceName.size() >= 1 && data.serviceName.size() <= 120
         && data.startAt is timestamp && data.endAt is timestamp && data.endAt > data.startAt
-        && data.timeZone is string && data.timeZone.size() <= 64
+        && data.timeZone is string && data.timeZone.size() >= 1 && data.timeZone.size() <= 64
         && data.language in ['rw', 'en', 'fr']
         && data.requestedBy in ['customer', 'owner']
         && data.status in ['pending', 'confirmed', 'declined', 'cancelled', 'completed', 'no_show']
@@ -232,25 +232,28 @@ service cloud.firestore {
     }
 
     match /appointments/{appointmentId} {
+      // Customers can read only their own records; business owners can read their business records.
       allow get, list: if isSignedIn()
         && (resource.data.customerUid == request.auth.uid || isAppointmentOwner(resource.data));
 
-      // Signed-in customers can submit requests; they cannot self-confirm.
+      // Requests remain pending until a verified business owner approves them.
       allow create: if isEmailVerified()
-        && validAppointment(incoming(), appointmentId)
+        && isValidAppointment(incoming(), appointmentId)
+        && isAppointmentOwner(incoming())
         && (
-          (incoming().requestedBy == 'customer' && incoming().customerUid == request.auth.uid && incoming().status == 'pending')
-          || (incoming().requestedBy == 'owner' && isAppointmentOwner(incoming()) && incoming().status == 'confirmed')
+          (incoming().requestedBy == 'customer'
+            && incoming().customerUid == request.auth.uid
+            && incoming().status == 'pending')
+          || (incoming().requestedBy == 'owner'
+            && incoming().status == 'confirmed')
         )
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time
-        && isAppointmentOwner(incoming());
+        && incoming().updatedAt == request.time;
 
-      // Only the business owner can change status or reschedule. Identity and
-      // customer-consent fields are immutable after creation.
+      // Only the verified owner can approve, decline, cancel or reschedule.
       allow update: if isEmailVerified()
         && isAppointmentOwner(existing())
-        && validAppointment(incoming(), appointmentId)
+        && isValidAppointment(incoming(), appointmentId)
         && incoming().id == existing().id
         && incoming().businessId == existing().businessId
         && incoming().ownerId == existing().ownerId
@@ -266,7 +269,6 @@ service cloud.firestore {
         && (
           (existing().status == 'pending' && incoming().status in ['confirmed', 'declined', 'cancelled'])
           || (existing().status == 'confirmed' && incoming().status in ['cancelled', 'completed', 'no_show'])
-          || (existing().status == incoming().status)
         );
 
       allow delete: if false;
