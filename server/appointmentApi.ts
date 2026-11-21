@@ -186,7 +186,11 @@ export function registerAppointmentRoutes(app: Express) {
         if (current.status !== 'confirmed') { res.status(409).json({ error: 'Only confirmed appointments can be rescheduled.' }); return; }
         const start = Date.parse(String(body.startAt ?? current.startAt));
         const end = Date.parse(String(body.endAt ?? current.endAt));
-        if (!Number.isFinite(start) || !Number.isFinite(end) || start <= Date.now() || end <= start || end - start > 86400000) { res.status(400).json({ error: 'Invalid rescheduled time.' }); return; }
+        const service = business.services.find((item) => item.id === current.serviceId);
+        const duration = service ? parseServiceDurationMinutes(service.durationOrUnit) : null;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start <= Date.now() || end <= start || !duration || end - start !== duration * 60000) {
+          res.status(400).json({ error: 'The new time must be in the future and match the configured service duration.' }); return;
+        }
         patch.startAt = new Date(start).toISOString(); patch.endAt = new Date(end).toISOString();
       }
       if (!Object.keys(patch).length) { res.status(400).json({ error: 'No changes supplied.' }); return; }
