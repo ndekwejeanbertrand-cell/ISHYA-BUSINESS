@@ -513,3 +513,46 @@ describe('ISHYA server credentials', () => {
     }
   });
 });
+
+
+import { buildReminderQueueRecords } from '../server/appointmentReminderQueue.ts';
+
+describe('ISHYA Business — durable reminder queue records', () => {
+  const confirmed = {
+    id: 'apt_queue_1',
+    businessId: 'biz_123',
+    customerUid: 'customer_1',
+    customerPhone: '+250788123456',
+    customerName: 'Aline Customer',
+    customerEmail: 'aline@example.com',
+    startAt: '2027-01-15T10:00:00.000Z',
+    status: 'confirmed' as const,
+    notificationChannels: ['whatsapp', 'app'] as const,
+    language: 'rw' as const,
+    timeZone: 'Africa/Kigali',
+  };
+
+  it('creates deterministic jobs for each future offset and selected channel', () => {
+    const jobs = buildReminderQueueRecords(confirmed, Date.parse('2027-01-14T08:00:00.000Z'));
+    assert.equal(jobs.length, 6);
+    assert.deepEqual(jobs.map((job) => job.id), [
+      'apt_queue_1_24h_whatsapp',
+      'apt_queue_1_24h_app',
+      'apt_queue_1h_whatsapp',
+      'apt_queue_1h_app',
+      'apt_queue_1_30m_whatsapp',
+      'apt_queue_1_30m_app',
+    ]);
+    assert.ok(jobs.every((job) => job.status === 'pending' && job.attemptCount === 0));
+    assert.ok(jobs.every((job) => job.customerPhone === confirmed.customerPhone));
+  });
+
+  it('does not create jobs for unconfirmed appointments or overdue reminder deadlines', () => {
+    assert.deepEqual(
+      buildReminderQueueRecords({ ...confirmed, status: 'pending' }, Date.parse('2027-01-14T08:00:00.000Z')),
+      []
+    );
+    const late = buildReminderQueueRecords(confirmed, Date.parse('2027-01-15T09:15:00.000Z'));
+    assert.deepEqual(late.map((job) => job.offset), ['30m', '30m']);
+  });
+});
