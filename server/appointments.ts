@@ -193,7 +193,7 @@ export function buildAppointmentReminderJobs(
     customerUid: string;
     startAt: string;
     status: AppointmentStatus;
-    notificationChannels: AppointmentNotificationChannel[];
+    notificationChannels: readonly AppointmentNotificationChannel[];
   },
   now = Date.now()
 ): AppointmentReminderJob[] {
