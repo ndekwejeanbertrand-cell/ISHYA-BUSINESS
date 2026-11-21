@@ -23,7 +23,7 @@ export interface AppointmentRequest {
   timeZone: string;
   language: Language;
   requestedBy: 'customer' | 'owner';
-  notificationChannels: AppointmentNotificationChannel[];
+  notificationChannels: readonly AppointmentNotificationChannel[];
   customerNote?: string;
 }
 
