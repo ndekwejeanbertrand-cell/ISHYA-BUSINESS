@@ -126,6 +126,11 @@ service cloud.firestore {
         && data.createdAt is timestamp && data.updatedAt is timestamp;
     }
 
+    // Reminder queue is server-only; clients must never read or mutate delivery jobs.
+    match /appointmentReminderJobs/{jobId} {
+      allow read, write: if false;
+    }
+
     match /appointments/{appointmentId} {
       allow get, list: if isSignedIn() && (resource.data.customerUid == request.auth.uid || isAppointmentOwner(resource.data));
       allow create: if isEmailVerified() && isValidAppointment(incoming(), appointmentId) && belongsToBusiness(incoming())
