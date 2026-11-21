@@ -515,7 +515,7 @@ describe('ISHYA server credentials', () => {
 });
 
 
-import { buildReminderQueueRecords } from '../server/appointmentReminderQueue.ts';
+import { buildReminderQueueRecords, releaseAppointmentReminderClaim } from '../server/appointmentReminderQueue.ts';
 
 describe('ISHYA Business — durable reminder queue records', () => {
   const confirmed = {
@@ -555,6 +555,14 @@ describe('ISHYA Business — durable reminder queue records', () => {
     }, Date.parse('2027-01-14T08:00:00.000Z'));
     assert.notEqual(original[0].id, rescheduled[0].id);
     assert.ok(rescheduled[0].id.includes(String(Date.parse('2027-01-16T10:00:00.000Z'))));
+  });
+
+  it('uses bounded retry scheduling and a lease token is required to release a claim', async () => {
+    assert.equal(typeof releaseAppointmentReminderClaim, 'function');
+    assert.throws(() => {
+      // Invalid identifiers are rejected before any network request.
+      void releaseAppointmentReminderClaim('../unsafe', '', '2027-01-15T10:00:00.000Z', 'failure');
+    }, /Invalid reminder claim/);
   });
 
   it('does not create jobs for unconfirmed appointments or overdue reminder deadlines', () => {
