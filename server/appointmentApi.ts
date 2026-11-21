@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { extractBearerToken, getFirebaseConfig, verifyFirebaseIdToken } from './auth.ts';
 import { getFirestoreBusinessById } from './firestoreRest.ts';
 import { AppointmentValidationError, parseServiceDurationMinutes, validateAppointmentRequest } from './appointments.ts';
+import { cancelPendingAppointmentReminders, enqueueAppointmentReminders } from './appointmentReminderQueue.ts';
 
 const firebaseConfig = getFirebaseConfig();
 const root = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${encodeURIComponent(firebaseConfig.firestoreDatabaseId)}/documents`;
@@ -128,8 +129,18 @@ export function registerAppointmentRoutes(app: Express) {
         body: JSON.stringify({ ...(transaction ? { transaction } : {}), writes: [write] }),
       });
       if (!commit.ok) throw new Error(`Appointment save failed (${commit.status}).`);
+      let remindersQueued: boolean | null = null;
+      if (status === 'confirmed') {
+        try {
+          await enqueueAppointmentReminders(data as Parameters<typeof enqueueAppointmentReminders>[0]);
+          remindersQueued = true;
+        } catch (reminderError) {
+          remindersQueued = false;
+          console.error('Appointment saved, but reminder queue creation failed:', reminderError);
+        }
+      }
       const now = new Date().toISOString();
-      res.status(201).json({ appointment: { ...data, createdAt: now, updatedAt: now } });
+      res.status(201).json({ appointment: { ...data, createdAt: now, updatedAt: now }, remindersQueued });
     } catch (error) { fail(res, error); }
   });
 
@@ -239,7 +250,21 @@ export function registerAppointmentRoutes(app: Express) {
         }] }),
       });
       if (!commit.ok) throw new Error(`Appointment update failed (${commit.status}).`);
-      res.json({ appointment: { ...current, ...patch, updatedAt: new Date().toISOString() } });
+      let remindersQueued: boolean | null = null;
+      try {
+        if (patch.status === 'confirmed' || patch.startAt !== undefined || patch.endAt !== undefined) {
+          await cancelPendingAppointmentReminders(id);
+          await enqueueAppointmentReminders({ ...current, ...patch } as Parameters<typeof enqueueAppointmentReminders>[0]);
+          remindersQueued = true;
+        } else if (['declined', 'cancelled', 'completed', 'no_show'].includes(String(patch.status))) {
+          await cancelPendingAppointmentReminders(id);
+          remindersQueued = true;
+        }
+      } catch (reminderError) {
+        remindersQueued = false;
+        console.error('Appointment updated, but reminder queue synchronization failed:', reminderError);
+      }
+      res.json({ appointment: { ...current, ...patch, updatedAt: new Date().toISOString() }, remindersQueued });
     } catch (error) { fail(res, error); }
   });
 }
