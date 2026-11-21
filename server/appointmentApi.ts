@@ -75,7 +75,7 @@ export function registerAppointmentRoutes(app: Express) {
       const id = `apt_${crypto.randomUUID().replace(/-/g, '')}`;
       const status = requestedBy === 'owner' ? 'confirmed' : 'pending';
       const data = {
-        id, businessId, ownerId: business.ownerId, customerUid: user.uid,
+        id, businessId, businessName: business.name, ownerId: business.ownerId, customerUid: user.uid,
         customerName: input.customerName, customerPhone: input.customerPhone,
         ...(input.customerEmail ? { customerEmail: input.customerEmail } : {}),
         serviceId: input.serviceId, serviceName: service.name,
