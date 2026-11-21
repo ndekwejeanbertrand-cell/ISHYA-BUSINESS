@@ -154,7 +154,12 @@ export async function claimDueAppointmentReminderJobs(
     body: JSON.stringify({
       structuredQuery: {
         from: [{ collectionId: REMINDER_COLLECTION }],
-        where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } } },
+        where: options.channel
+          ? { compositeFilter: { op: 'AND', filters: [
+              { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } } },
+              { fieldFilter: { field: { fieldPath: 'channel' }, op: 'EQUAL', value: { stringValue: options.channel } } },
+            ] } }
+          : { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } } },
         limit: 250,
       },
     }),
@@ -164,7 +169,6 @@ export async function claimDueAppointmentReminderJobs(
   const due = rows.map((row) => row.document).filter((doc): doc is FirestoreDocument => Boolean(doc?.name && doc.updateTime))
     .map((doc) => ({ doc, record: unpack(doc) }))
     .filter(({ record }) => typeof record.nextAttemptAt === 'string' && Date.parse(String(record.nextAttemptAt)) <= now)
-    .filter(({ record }) => !options.channel || record.channel === options.channel)
     .sort((a, b) => Date.parse(String(a.record.nextAttemptAt)) - Date.parse(String(b.record.nextAttemptAt)))
     .slice(0, limit);
 
@@ -403,4 +407,69 @@ export async function finalizeAppointmentReminderClaim(
   if (response.status === 409 || response.status === 412) return false;
   if (!response.ok) throw new Error(`Reminder job finalization failed (HTTP ${response.status}).`);
   return true;
+}
+
+
+export interface InAppAppointmentNotificationInput {
+  userUid: string;
+  appointmentId: string;
+  businessId: string;
+  language: 'rw' | 'en' | 'fr';
+  serviceName: string;
+  businessName: string;
+  startAt: string;
+  timeZone: string;
+  offset: string;
+}
+
+/** Creates one deterministic, private in-app notification; safe to retry. */
+export async function createInAppAppointmentNotification(
+  notificationId: string,
+  input: InAppAppointmentNotificationInput
+): Promise<boolean> {
+  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(notificationId)
+    || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.userUid)
+    || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.appointmentId)) {
+    throw new Error('Invalid in-app notification identity.');
+  }
+  const copy = {
+    rw: { title: 'Ikwibutsa rendez-vous', body: `Ufite rendez-vous ya ${input.serviceName} kuri ${input.businessName}.` },
+    en: { title: 'Appointment reminder', body: `Your ${input.serviceName} appointment at ${input.businessName} is coming up.` },
+    fr: { title: 'Rappel de rendez-vous', body: `Votre rendez-vous ${input.serviceName} chez ${input.businessName} approche.` },
+  }[input.language];
+  const fields = {
+    id: notificationId,
+    userUid: input.userUid,
+    appointmentId: input.appointmentId,
+    businessId: input.businessId,
+    type: 'appointment_reminder',
+    title: copy.title,
+    body: copy.body,
+    startAt: input.startAt,
+    timeZone: input.timeZone,
+    offset: input.offset,
+    read: false,
+    createdAt: new Date().toISOString(),
+  };
+  const response = await firestoreRequest(':commit', {
+    method: 'POST',
+    body: JSON.stringify({
+      writes: [{
+        update: {
+          name: `${firestoreRoot()}/userNotifications/${encodeURIComponent(notificationId)}`,
+          fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, encode(value)])),
+        },
+        currentDocument: { exists: false },
+      }],
+    }),
+  });
+  if (response.ok) return true;
+  if (response.status === 409 || response.status === 412) {
+    const existing = await firestoreRequest(`/userNotifications/${encodeURIComponent(notificationId)}`);
+    if (!existing.ok) throw new Error(`Existing in-app notification verification failed (HTTP ${existing.status}).`);
+    const record = unpack(await existing.json() as FirestoreDocument);
+    if (record.userUid === input.userUid && record.appointmentId === input.appointmentId) return true;
+    throw new Error('In-app notification identity conflict.');
+  }
+  throw new Error(`In-app notification creation failed (HTTP ${response.status}).`);
 }
