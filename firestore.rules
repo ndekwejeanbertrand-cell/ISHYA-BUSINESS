@@ -126,7 +126,12 @@ service cloud.firestore {
         && data.createdAt is timestamp && data.updatedAt is timestamp;
     }
 
-    // In-app notifications are written by the trusted server and read through authenticated API routes.\n    match /userNotifications/{notificationId} {\n      allow read, write: if false;\n    }\n\n    // Reminder queue is server-only; clients must never read or mutate delivery jobs.
+    // In-app notifications are written by the trusted server and read through authenticated API routes.
+    match /userNotifications/{notificationId} {
+      allow read, write: if false;
+    }
+
+    // Reminder queue is server-only; clients must never read or mutate delivery jobs.
     match /appointmentReminderJobs/{jobId} {
       allow read, write: if false;
     }
