@@ -33,6 +33,9 @@ import {
   searchCountries,
 } from '../server/locations.ts';
 import type { BusinessProfile } from '../src/types.ts';
+import { isValidReminderWorkerAuthorization, processDueWhatsAppAppointmentReminders, processDueInAppAppointmentReminders, processDueIntouchSmsAppointmentReminders } from '../server/appointmentReminderWorker.ts';
+import { buildAppointmentReminderTemplatePayload, isReminderAppointmentCurrent } from '../server/appointmentReminderDelivery.ts';
+import { buildIntouchAppointmentSmsMessage, sendIntouchAppointmentSms } from '../server/appointmentSmsDelivery.ts';
 
 function makeTestBusiness(overrides: Partial<BusinessProfile>): BusinessProfile {
   return {
@@ -421,5 +424,288 @@ describe('ISHYA Business — Worldwide Countries, Regions & Dependent Cities', (
       query: 'Austin',
     });
     assert.ok(txCities.cities.some((c) => c.name === 'Austin'));
+  });
+});
+
+
+import {
+  AppointmentValidationError,
+  buildAppointmentReminderJobs,
+  parseServiceDurationMinutes,
+  validateAppointmentRequest,
+} from '../server/appointments.ts';
+
+describe('ISHYA Business — Appointment domain and reminders', () => {
+  const request = {
+    businessId: 'biz_123',
+    serviceId: 'service_1',
+    customerUid: 'customer_1',
+    customerName: 'Aline Customer',
+    customerPhone: '+250788123456',
+    startAt: '2027-01-15T10:00:00.000Z',
+    endAt: '2027-01-15T11:00:00.000Z',
+    timeZone: 'Africa/Kigali',
+    language: 'rw',
+    requestedBy: 'customer',
+    notificationChannels: ['whatsapp', 'app'],
+  };
+
+  it('parses explicit service durations and refuses ambiguous units', () => {
+    assert.equal(parseServiceDurationMinutes('45 mins'), 45);
+    assert.equal(parseServiceDurationMinutes('1 hour'), 60);
+    assert.equal(parseServiceDurationMinutes('2 hrs'), 120);
+    assert.equal(parseServiceDurationMinutes('Unit'), null);
+    assert.equal(parseServiceDurationMinutes(''), null);
+  });
+
+  it('validates future appointment requests and normalizes timestamps', () => {
+    const result = validateAppointmentRequest(request, Date.parse('2027-01-01T00:00:00Z'));
+    assert.equal(result.startAt, '2027-01-15T10:00:00.000Z');
+    assert.deepEqual(result.notificationChannels, ['whatsapp', 'app']);
+  });
+
+  it('rejects invalid phone numbers, unsupported time zones, and past appointments', () => {
+    assert.throws(
+      () => validateAppointmentRequest({ ...request, customerPhone: '0788123456' }, 0),
+      AppointmentValidationError
+    );
+    assert.throws(
+      () => validateAppointmentRequest({ ...request, timeZone: 'Mars/Phobos' }, 0),
+      AppointmentValidationError
+    );
+    assert.throws(
+      () => validateAppointmentRequest(request, Date.parse('2027-02-01T00:00:00Z')),
+      AppointmentValidationError
+    );
+  });
+
+  it('creates reminders only for confirmed appointments and only for future deadlines', () => {
+    const base = {
+      id: 'appt_1',
+      businessId: 'biz_123',
+      customerUid: 'customer_1',
+      startAt: '2027-01-15T10:00:00.000Z',
+      notificationChannels: ['whatsapp', 'app'] as const,
+    };
+    assert.deepEqual(buildAppointmentReminderJobs({ ...base, status: 'pending' }, 0), []);
+    const jobs = buildAppointmentReminderJobs({ ...base, status: 'confirmed' }, Date.parse('2027-01-14T09:30:00Z'));
+    assert.deepEqual(jobs.map((job) => job.offset), ['24h', '1h', '30m']);
+    assert.deepEqual(jobs[0].channels, ['whatsapp', 'app']);
+    const lateJobs = buildAppointmentReminderJobs({ ...base, status: 'confirmed' }, Date.parse('2027-01-15T09:15:00Z'));
+    assert.deepEqual(lateJobs.map((job) => job.offset), ['30m']);
+  });
+});
+
+
+import { getGoogleServiceAccountAccessToken, resetGoogleServiceAccountTokenCache } from '../server/googleServiceAccount.ts';
+
+describe('ISHYA server credentials', () => {
+  it('fails closed when the server-only Firebase service account secret is absent', async () => {
+    const original = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    resetGoogleServiceAccountTokenCache();
+    try {
+      await assert.rejects(
+        () => getGoogleServiceAccountAccessToken(),
+        /FIREBASE_SERVICE_ACCOUNT_JSON is not configured/
+      );
+    } finally {
+      if (original === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+      else process.env.FIREBASE_SERVICE_ACCOUNT_JSON = original;
+      resetGoogleServiceAccountTokenCache();
+    }
+  });
+});
+
+
+import { buildReminderQueueRecords, getReminderRetryDelayMs, releaseAppointmentReminderClaim } from '../server/appointmentReminderQueue.ts';
+
+describe('ISHYA Business — durable reminder queue records', () => {
+  const confirmed = {
+    id: 'apt_queue_1',
+    businessId: 'biz_123',
+    customerUid: 'customer_1',
+    customerPhone: '+250788123456',
+    customerName: 'Aline Customer',
+    customerEmail: 'aline@example.com',
+    startAt: '2027-01-15T10:00:00.000Z',
+    status: 'confirmed' as const,
+    notificationChannels: ['whatsapp', 'app'] as const,
+    language: 'rw' as const,
+    timeZone: 'Africa/Kigali',
+  };
+
+  it('creates deterministic jobs for each future offset and selected channel', () => {
+    const jobs = buildReminderQueueRecords(confirmed, Date.parse('2027-01-14T08:00:00.000Z'));
+    assert.equal(jobs.length, 6);
+    assert.deepEqual(jobs.map((job) => job.id), [
+      'apt_queue_1_1800007200000_24h_whatsapp',
+      'apt_queue_1_1800007200000_24h_app',
+      'apt_queue_1_1800007200000_1h_whatsapp',
+      'apt_queue_1_1800007200000_1h_app',
+      'apt_queue_1_1800007200000_30m_whatsapp',
+      'apt_queue_1_1800007200000_30m_app',
+    ]);
+    assert.ok(jobs.every((job) => job.status === 'pending' && job.attemptCount === 0));
+    assert.ok(jobs.every((job) => job.customerPhone === confirmed.customerPhone));
+  });
+
+  it('creates a new deterministic reminder identity when an appointment is rescheduled', () => {
+    const original = buildReminderQueueRecords(confirmed, Date.parse('2027-01-14T08:00:00.000Z'));
+    const rescheduled = buildReminderQueueRecords({
+      ...confirmed,
+      startAt: '2027-01-16T10:00:00.000Z',
+    }, Date.parse('2027-01-14T08:00:00.000Z'));
+    assert.notEqual(original[0].id, rescheduled[0].id);
+    assert.ok(rescheduled[0].id.includes(String(Date.parse('2027-01-16T10:00:00.000Z'))));
+  });
+
+  it('calculates bounded exponential retry delays', () => {
+    assert.equal(getReminderRetryDelayMs(1), 60_000);
+    assert.equal(getReminderRetryDelayMs(2), 120_000);
+    assert.equal(getReminderRetryDelayMs(3), 240_000);
+    assert.equal(getReminderRetryDelayMs(99), 60 * 60_000);
+  });
+
+  it('requires a valid job ID and lease token before releasing a claim', async () => {
+    await assert.rejects(
+      () => releaseAppointmentReminderClaim('../unsafe', '', '2027-01-15T10:00:00.000Z', 'failure'),
+      /Invalid reminder claim/
+    );
+  });
+
+  it('does not create jobs for unconfirmed appointments or overdue reminder deadlines', () => {
+    assert.deepEqual(
+      buildReminderQueueRecords({ ...confirmed, status: 'pending' }, Date.parse('2027-01-14T08:00:00.000Z')),
+      []
+    );
+    const late = buildReminderQueueRecords(confirmed, Date.parse('2027-01-15T09:15:00.000Z'));
+    assert.deepEqual(late.map((job) => job.offset), ['30m', '30m']);
+  });
+});
+
+describe('ISHYA reminder worker authentication', () => {
+  const secret = 'a'.repeat(48);
+
+  it('accepts only the configured Bearer secret', () => {
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, secret), true);
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${'b'.repeat(48)}`, secret), false);
+    assert.equal(isValidReminderWorkerAuthorization(secret, secret), false);
+  });
+
+  it('fails closed when the secret is absent, short, or the header is missing', () => {
+    assert.equal(isValidReminderWorkerAuthorization(undefined, secret), false);
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, undefined), false);
+    assert.equal(isValidReminderWorkerAuthorization(`Bearer ${secret}`, 'short'), false);
+  });
+});
+
+
+describe('ISHYA WhatsApp appointment reminder adapter', () => {
+  const templateInput = {
+    customerName: 'Aline',
+    businessName: 'ISHYA Salon',
+    serviceName: 'Hair styling',
+    startAt: '2027-01-15T10:00:00.000Z',
+    timeZone: 'Africa/Kigali',
+    language: 'en' as const,
+  };
+
+  it('builds the approved four-parameter WhatsApp template payload', () => {
+    const payload = buildAppointmentReminderTemplatePayload(
+      '+250788123456',
+      templateInput,
+      'appointment_reminder',
+      'en'
+    );
+    assert.equal(payload.to, '250788123456');
+    assert.equal(payload.template.name, 'appointment_reminder');
+    assert.equal(payload.template.components[0].parameters.length, 4);
+    assert.deepEqual(
+      payload.template.components[0].parameters.slice(0, 3).map((item) => item.text),
+      ['Aline', 'ISHYA Salon', 'Hair styling']
+    );
+  });
+
+  it('rejects invalid recipients and incomplete template data', () => {
+    assert.throws(
+      () => buildAppointmentReminderTemplatePayload('0788123456', templateInput, 'appointment_reminder', 'en'),
+      /recipient/
+    );
+    assert.throws(
+      () => buildAppointmentReminderTemplatePayload('+250788123456', { ...templateInput, businessName: '' }, 'appointment_reminder', 'en'),
+      /incomplete/
+    );
+  });
+
+  it('requires the appointment to remain confirmed and at the queued start time', () => {
+    const queued = { appointmentId: 'apt_1', appointmentStartAt: templateInput.startAt };
+    assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'confirmed', startAt: templateInput.startAt }), true);
+    assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'cancelled', startAt: templateInput.startAt }), false);
+    assert.equal(isReminderAppointmentCurrent(queued, { id: 'apt_1', status: 'confirmed', startAt: '2027-01-16T10:00:00.000Z' }), false);
+  });
+});
+
+
+describe('ISHYA WhatsApp reminder worker configuration and safety', () => {
+  it('exports bounded WhatsApp and in-app worker processors', () => {
+    assert.equal(typeof processDueWhatsAppAppointmentReminders, 'function');
+    assert.equal(typeof processDueInAppAppointmentReminders, 'function');
+  });
+});
+
+
+describe('ISHYA IntouchSMS appointment reminder adapter', () => {
+  const smsInput = {
+    customerName: 'Aline',
+    businessName: 'ISHYA Salon',
+    serviceName: 'Hair styling',
+    startAt: '2027-01-15T10:00:00.000Z',
+    timeZone: 'Africa/Kigali',
+    language: 'en' as const,
+  };
+
+  it('builds localized appointment reminders and sends with HTTP Basic authentication', async () => {
+    assert.match(buildIntouchAppointmentSmsMessage(smsInput), /ISHYA: reminder for Aline/);
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const result = await sendIntouchAppointmentSms('+250788123456', smsInput, {
+      username: 'test-user',
+      password: 'test-password',
+      senderId: 'ISHYA',
+    }, async (url, init) => {
+      capturedUrl = String(url);
+      capturedInit = init;
+      return new Response(JSON.stringify({
+        success: true,
+        details: [{ status: 'P', messageid: 12345 }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    assert.equal(capturedUrl, 'https://www.intouchsms.co.rw/api/sendsms/.json');
+    assert.equal(capturedInit?.method, 'POST');
+    assert.match(String((capturedInit?.headers as Record<string, string>).Authorization), /^Basic /);
+    assert.match(String(capturedInit?.body), /recipients=%2B250788123456/);
+    assert.deepEqual(result, { messageId: '12345', providerStatus: 'P' });
+  });
+
+  it('rejects invalid recipients, sender IDs and unsuccessful provider responses', async () => {
+    await assert.rejects(
+      sendIntouchAppointmentSms('0788123456', smsInput, { username: 'u', password: 'p', senderId: 'ISHYA' }),
+      /recipient/
+    );
+    await assert.rejects(
+      sendIntouchAppointmentSms('+250788123456', smsInput, { username: 'u', password: 'p', senderId: 'ISHYA BRAND' }),
+      /sender ID/
+    );
+    await assert.rejects(
+      sendIntouchAppointmentSms('+250788123456', smsInput, { username: 'u', password: 'p', senderId: 'ISHYA' }, async () =>
+        new Response(JSON.stringify({ success: false, details: [{ status: 'E' }] }), { status: 400 })
+      ),
+      /rejected/
+    );
+  });
+
+  it('exposes the bounded IntouchSMS worker processor', () => {
+    assert.equal(typeof processDueIntouchSmsAppointmentReminders, 'function');
   });
 });
